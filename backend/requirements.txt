@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+sentence-transformers
+torch
+numpy
+motor
+pymongo
+python-dotenv
+pydantic
+google-auth-oauthlib
+google-api-python-client

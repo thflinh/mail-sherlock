@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "mail-sherlock",
+  "version": "1.0.0",
+  "description": "Find any email by describing it in plain English.",
+  "action": {
+    "default_popup": "src/popup/popup.html"
+  },
+  "permissions": [],
+  "host_permissions": [
+    "http://localhost:8000/*"
+  ]
+}

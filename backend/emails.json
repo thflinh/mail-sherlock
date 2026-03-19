@@ -1,0 +1,107 @@
+[
+  {
+    "id": "001",
+    "subject": "Lease Renewal Confirmation",
+    "sender": "landlord@realty.com",
+    "date": "2024-11-15",
+    "body": "Hi, I'm confirming that your lease renewal has been processed. Your monthly rent will remain at $1,450 starting January 1st. Please sign the attached documents."
+  },
+  {
+    "id": "002",
+    "subject": "Deadline Extension - CS301 Final Project",
+    "sender": "prof.smith@university.edu",
+    "date": "2024-12-03",
+    "body": "Due to the upcoming holidays, I'm moving the final project deadline from December 10th to December 17th. Please submit via the course portal."
+  },
+  {
+    "id": "003",
+    "subject": "Your Amazon Order Has Shipped",
+    "sender": "shipment-tracking@amazon.com",
+    "date": "2024-12-01",
+    "body": "Your order #112-4859302 containing a mechanical keyboard has shipped and will arrive by December 4th. Track your package using the link below."
+  },
+  {
+    "id": "004",
+    "subject": "Interview Invitation - Software Engineer Role",
+    "sender": "recruiting@techcorp.io",
+    "date": "2024-11-20",
+    "body": "We reviewed your application and would like to invite you to a technical interview for the Software Engineer position. Please select a time slot that works for you."
+  },
+  {
+    "id": "005",
+    "subject": "Dentist Appointment Reminder",
+    "sender": "appointments@smiledental.com",
+    "date": "2024-11-28",
+    "body": "This is a reminder that you have a dental cleaning scheduled for December 5th at 10:00 AM. Please call us 24 hours in advance if you need to reschedule."
+  },
+  {
+    "id": "006",
+    "subject": "Flight Booking Confirmation - NYC to LAX",
+    "sender": "noreply@delta.com",
+    "date": "2024-11-10",
+    "body": "Your flight DL204 from New York JFK to Los Angeles LAX on December 22nd has been confirmed. Seat 14B. Check-in opens 24 hours before departure."
+  },
+  {
+    "id": "007",
+    "subject": "Team Standup - Time Change",
+    "sender": "manager@company.com",
+    "date": "2024-12-02",
+    "body": "Starting next Monday, the daily standup is moving from 9:00 AM to 10:00 AM EST. Please update your calendars. The Zoom link stays the same."
+  },
+  {
+    "id": "008",
+    "subject": "Bank Statement Available",
+    "sender": "statements@chase.com",
+    "date": "2024-11-30",
+    "body": "Your November account statement is now available. Log in to view your transactions, balance, and spending summary for the month."
+  },
+  {
+    "id": "009",
+    "subject": "Gym Membership Renewal",
+    "sender": "billing@fitlife.com",
+    "date": "2024-11-25",
+    "body": "Your annual gym membership is up for renewal on December 31st. Renew now to lock in your current rate of $49/month. New members will pay $65/month."
+  },
+  {
+    "id": "010",
+    "subject": "Project Kickoff - Q1 Mobile App",
+    "sender": "pm@company.com",
+    "date": "2024-12-04",
+    "body": "The Q1 mobile app project officially kicks off Monday. Please review the attached PRD and come prepared to discuss your team's deliverables for the first sprint."
+  },
+  {
+    "id": "011",
+    "subject": "Refund Processed - Order #9823",
+    "sender": "support@shopify-store.com",
+    "date": "2024-11-18",
+    "body": "We've processed a full refund of $89.99 for your returned jacket. The amount should appear on your card within 3-5 business days."
+  },
+  {
+    "id": "012",
+    "subject": "Scholarship Application - Decision",
+    "sender": "financial-aid@university.edu",
+    "date": "2024-11-22",
+    "body": "Congratulations! Your application for the Merit Excellence Scholarship has been approved. You will receive $2,000 applied to your spring tuition."
+  },
+  {
+    "id": "013",
+    "subject": "Parking Violation Notice",
+    "sender": "violations@cityparking.gov",
+    "date": "2024-11-29",
+    "body": "A parking violation was issued to your vehicle on November 28th at 3rd Avenue and Main Street. Fine: $75. Pay within 30 days to avoid additional fees."
+  },
+  {
+    "id": "014",
+    "subject": "Code Review Request - auth-service PR #42",
+    "sender": "colleague@company.com",
+    "date": "2024-12-05",
+    "body": "Hey, I've opened a pull request for the new JWT authentication flow. Would appreciate your review before we merge. Should be a quick one — mostly middleware changes."
+  },
+  {
+    "id": "015",
+    "subject": "Utility Bill - November",
+    "sender": "billing@electricco.com",
+    "date": "2024-11-27",
+    "body": "Your electricity bill for November is $112.40. Due date is December 15th. You can pay online, by phone, or set up auto-pay to avoid late fees."
+  }
+]
