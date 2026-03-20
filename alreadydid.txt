@@ -1,0 +1,97 @@
+mail-sherlock — project memo (updated to match the repo)
+
+Idea
+----
+A Chrome extension that lets you find email by describing it in plain English, powered by semantic search (sentence embeddings). Working name in earlier notes: “Smart Inbox Assistant.”
+
+Problem
+-------
+Normal inbox search is keyword-heavy. If you only remember context (“that email about my lease renewal” or “where the professor moved the deadline”), exact-keyword search often fails and you lose time digging.
+
+Solution
+--------
+A Chrome extension popup: you type natural language; a local FastAPI backend loads messages from MongoDB, embeds the query and each message with a sentence-transformer, ranks by cosine similarity, and returns the top matches with a relevance score. Optional: sync real Gmail into MongoDB so results map back to Gmail in the browser.
+
+How it works (accurate pipeline)
+--------------------------------
+1. User opens the extension popup.
+2. User enters a natural-language query (e.g. “landlord confirmed the rent price”).
+3. Extension POSTs to the backend (see search.ts — uses http://127.0.0.1:8000 on Windows-friendly setups).
+4. Backend reads emails from MongoDB, builds text from subject + body (and related fields), encodes query + all docs with all-MiniLM-L6-v2 (L2-normalized; similarity = dot product).
+5. Top-k results return to the popup; ResultCard shows subject, sender, date, snippet, score; if Gmail sync stored threadId, the card links to open that thread in Gmail.
+
+Note: Embeddings are computed when you call POST /ask (not pre-computed at seed time). Seed only loads JSON rows into MongoDB.
+
+Key features (current)
+----------------------
+- Natural-language search over stored messages
+- Semantic ranking (meaning, not only literal word overlap)
+- Ranked results with relevance score
+- Backend + model run locally; email text stays on your machine / your MongoDB (Gmail sync uses Google’s API with your OAuth)
+- Chrome extension (MV3), React + TypeScript + Vite
+
+Backend (Python + FastAPI)
+--------------------------
+- backend/main.py — FastAPI app, CORS, lifespan DB connect
+  - GET  /auth/login, /auth/callback — Gmail OAuth (optional); token in token.json
+  - POST /ask — semantic search over MongoDB emails collection
+  - GET  /health — ping MongoDB (quick “is DB reachable?” check)
+  - POST /emails/seed — replace emails collection with backend/emails.json (mock data)
+  - POST /emails/sync — replace emails with latest from Gmail (requires credentials + OAuth)
+- backend/db.py — Motor async Mongo; Certifi tlsCAFile for Atlas TLS on Windows; optional MONGODB_TLS_INSECURE=true in .env for local debugging only
+- backend/embeddings.py — SentenceTransformer all-MiniLM-L6-v2, encode(), cosine_similarity()
+- backend/emails.json — mock emails (leases, school, orders, interviews, etc.)
+- backend/requirements.txt — fastapi, uvicorn, sentence-transformers, torch, motor, pymongo, certifi, google APIs, …
+- backend/.env — MONGODB_URI, DB_MAIL; optional MONGODB_TLS_INSECURE
+
+Chrome extension (React + TypeScript + Vite)
+--------------------------------------------
+- extension/src/api/search.ts — fetch POST /ask; surfaces API error details; API base 127.0.0.1:8000
+- extension/src/popup/App.tsx — search UI, loading, errors, results list
+- extension/src/popup/ResultCard.tsx — one result; “Open in Gmail” when threadId exists
+- extension/src/popup/App.css — dark theme (~380px popup)
+- extension/public/manifest.json — MV3; host_permissions for API + mail.google.com
+- extension/vite.config.ts — base: "./"; build outDir ../dist (repo-root dist/)
+- extension/package.json — React 18, Vite 5
+
+Root / other
+------------
+- dist/ — load THIS folder in Chrome after npm run build (not extension/dist)
+- README.md — runbook + TLS troubleshooting
+- instruction.md — planned next steps (hybrid search, chat, 300-message sync, etc.)
+- .gitignore — venv, node_modules, dist, secrets (.env, credentials, tokens)
+
+End-to-end today
+----------------
+Popup query → POST /ask → load emails from Mongo → embed query + bodies → rank → JSON results → cards (and Gmail deep link if synced).
+
+Run checklist (Windows-oriented)
+--------------------------------
+Step 1 — Backend
+  cd c:\CPP\SWE\mail-sherlock\backend
+  python -m venv .venv
+  .venv\Scripts\activate
+  pip install -r requirements.txt
+  Configure backend\.env (MONGODB_URI at minimum)
+  python main.py
+  (or: uvicorn main:app --reload --host 0.0.0.0 --port 8000)
+
+Step 2 — Verify DB (optional but useful)
+  GET http://127.0.0.1:8000/health
+
+Step 3 — Data
+  Mock:  POST http://127.0.0.1:8000/emails/seed
+  Gmail: GET http://localhost:8000/auth/login → finish OAuth → POST http://127.0.0.1:8000/emails/sync
+  (curl.exe or Invoke-RestMethod both work; PowerShell’s curl alias can confuse quoting.)
+
+Step 4 — Extension build
+  cd c:\CPP\SWE\mail-sherlock\extension
+  npm install
+  npm run build
+
+Step 5 — Load in Chrome
+  chrome://extensions → Developer mode → Load unpacked → select c:\CPP\SWE\mail-sherlock\dist
+  After code/manifest changes: npm run build again, then Reload the extension.
+
+Step 6 — Test
+  Open popup → e.g. “email about my lease renewal” → Search → results if Mongo has data and TLS/connectivity succeed.

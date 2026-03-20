@@ -5,6 +5,7 @@ torch
 numpy
 motor
 pymongo
+certifi
 python-dotenv
 pydantic
 google-auth-oauthlib

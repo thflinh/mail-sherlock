@@ -85,6 +85,37 @@ body {
   padding: 10px 12px;
 }
 
+a.result-card--link {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+a.result-card--link:hover {
+  border-color: #4f46e5;
+  background: #1f1f24;
+}
+
+a.result-card--link:focus-visible {
+  outline: 2px solid #4f46e5;
+  outline-offset: 2px;
+}
+
+.open-gmail-hint {
+  display: block;
+  margin-top: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #818cf8;
+}
+
+.open-gmail-hint--muted {
+  font-weight: 500;
+  color: #666;
+}
+
 .result-header {
   display: flex;
   justify-content: space-between;

@@ -6,6 +6,7 @@ import "./App.css";
 export default function App() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<EmailResult[]>([]);
+  const [gmailAuthEmail, setGmailAuthEmail] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -16,8 +17,16 @@ export default function App() {
     try {
       const data = await searchEmails(query);
       setResults(data.results);
-    } catch {
-      setError("Could not reach the backend. Make sure the server is running.");
+      if ("gmailAuthEmail" in data) {
+        const g = data.gmailAuthEmail;
+        setGmailAuthEmail(
+          typeof g === "string" && g.trim() !== "" ? g.trim() : null,
+        );
+      }
+    } catch (err) {
+      const msg =
+        err instanceof Error ? err.message : "Something went wrong. Is the backend running?";
+      setError(msg);
     } finally {
       setLoading(false);
     }
@@ -51,7 +60,7 @@ export default function App() {
 
       <div className="results">
         {results.map((email) => (
-          <ResultCard key={email.id} email={email} />
+          <ResultCard key={email.id} email={email} gmailAuthEmail={gmailAuthEmail} />
         ))}
         {!loading && results.length === 0 && query && (
           <p className="empty">No results found.</p>
