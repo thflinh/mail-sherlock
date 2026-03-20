@@ -16,7 +16,10 @@ export interface EmailResult {
  * Opens the thread in Gmail for the same Google account that OAuth’d with mail-sherlock
  * (uses Google’s authuser= so the browser picks that identity, not default /u/0).
  */
-export function gmailWebUrlForThread(threadId: string, gmailAuthEmail: string): string {
+export function gmailWebUrlForThread(
+  threadId: string,
+  gmailAuthEmail: string
+): string {
   const u = new URL("https://mail.google.com/mail/u/0/");
   u.searchParams.set("authuser", gmailAuthEmail.trim());
   u.hash = `#all/${threadId}`;
@@ -44,7 +47,10 @@ async function errorMessageFromResponse(res: Response): Promise<string> {
   return text.trim() || `HTTP ${res.status}`;
 }
 
-export async function searchEmails(query: string, topK = 5): Promise<SearchResponse> {
+export async function searchEmails(
+  query: string,
+  topK = 5
+): Promise<SearchResponse> {
   let res: Response;
   try {
     res = await fetch(`${API_URL}/ask`, {

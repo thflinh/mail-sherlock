@@ -20,12 +20,14 @@ export default function App() {
       if ("gmailAuthEmail" in data) {
         const g = data.gmailAuthEmail;
         setGmailAuthEmail(
-          typeof g === "string" && g.trim() !== "" ? g.trim() : null,
+          typeof g === "string" && g.trim() !== "" ? g.trim() : null
         );
       }
     } catch (err) {
       const msg =
-        err instanceof Error ? err.message : "Something went wrong. Is the backend running?";
+        err instanceof Error
+          ? err.message
+          : "Something went wrong. Is the backend running?";
       setError(msg);
     } finally {
       setLoading(false);
@@ -51,7 +53,11 @@ export default function App() {
           onKeyDown={handleKeyDown}
           autoFocus
         />
-        <button className="search-btn" onClick={handleSearch} disabled={loading}>
+        <button
+          className="search-btn"
+          onClick={handleSearch}
+          disabled={loading}
+        >
           {loading ? "..." : "Search"}
         </button>
       </div>
@@ -60,7 +66,11 @@ export default function App() {
 
       <div className="results">
         {results.map((email) => (
-          <ResultCard key={email.id} email={email} gmailAuthEmail={gmailAuthEmail} />
+          <ResultCard
+            key={email.id}
+            email={email}
+            gmailAuthEmail={gmailAuthEmail}
+          />
         ))}
         {!loading && results.length === 0 && query && (
           <p className="empty">No results found.</p>

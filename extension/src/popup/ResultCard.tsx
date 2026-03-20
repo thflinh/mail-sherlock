@@ -25,9 +25,7 @@ export default function ResultCard({ email, gmailAuthEmail }: Props) {
         <span className="date">{email.date}</span>
       </div>
       <p className="snippet">{email.body.slice(0, 120)}...</p>
-      {gmailUrl && (
-        <span className="open-gmail-hint">Open in Gmail</span>
-      )}
+      {gmailUrl && <span className="open-gmail-hint">Open in Gmail</span>}
       {threadId && !gmailUrl && (
         <span className="open-gmail-hint open-gmail-hint--muted">
           Re-run POST /emails/sync to open threads in your OAuth Gmail account.
