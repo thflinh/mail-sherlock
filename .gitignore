@@ -8,6 +8,8 @@ backend/token.json
 # Virtual environments (any path)
 venv/
 .venv/
+env/
+backend/env/
 
 # Node
 node_modules/
