@@ -1,13 +1,16 @@
 # Python
+__pycache__/
+*.pyc
 backend/__pycache__/
 backend/.env
 backend/credentials.json
 backend/token.json
-backend/venv/
-backend/.venv/
-*.pyc
+# Virtual environments (any path)
+venv/
+.venv/
 
 # Node
+node_modules/
 extension/node_modules/
 dist/
 
