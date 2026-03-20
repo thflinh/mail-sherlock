@@ -78,4 +78,16 @@ This report describes the **purpose** and **function** of project-owned files (n
 
 ---
 
+## Do not commit (local / generated)
+
+| Path | Why |
+|------|-----|
+| **`venv/`**, **`.venv/`**, **`env/`**, **`backend/env/`** | Python virtualenvs — huge (`torch`, etc.), machine-specific. Recreate with `python -m venv` + `pip install -r requirements.txt`. |
+| **`node_modules/`**, **`extension/node_modules/`** | npm dependencies — use `npm install` after clone. |
+| **`dist/`** | Vite build output — run `npm run build` in `extension/`. |
+| **`backend/.env`**, **`backend/credentials.json`**, **`backend/token.json`** | Secrets and OAuth tokens — keep local only (see `.gitignore`). |
+| **`__pycache__/`**, **`*.pyc`** | Python bytecode — regenerated automatically. |
+
+---
+
 *Generated for the mail-sherlock codebase; adjust if new files are added.*
