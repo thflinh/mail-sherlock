@@ -1,11 +1,12 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
 from typing import Optional
-import numpy as np
+import html
 import json
+import numpy as np
 from pathlib import Path
 from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
@@ -28,6 +29,15 @@ CREDENTIALS_FILE = Path(__file__).parent / "credentials.json"
 TOKEN_FILE = Path(__file__).parent / "token.json"
 
 SETTINGS_DOC_ID = "oauth"
+LANDING_FILE = Path(__file__).parent / "static" / "index.html"
+OAUTH_SUCCESS_FILE = Path(__file__).parent / "static" / "oauth_success.html"
+OAUTH_ERROR_FILE = Path(__file__).parent / "static" / "oauth_error.html"
+
+
+def _oauth_error_html(message: str, status_code: int = 400) -> HTMLResponse:
+    body = OAUTH_ERROR_FILE.read_text(encoding="utf-8")
+    body = body.replace("###ERROR_MESSAGE###", html.escape(message))
+    return HTMLResponse(content=body, status_code=status_code)
 
 
 async def _get_stored_gmail_address(db) -> Optional[str]:
@@ -58,6 +68,17 @@ app.add_middleware(
 _flows = {}
 
 
+@app.get("/", response_class=HTMLResponse)
+def landing_page():
+    """Dark landing page: product intro + Gmail OAuth CTA."""
+    if not LANDING_FILE.exists():
+        return HTMLResponse(
+            "<html><body>Landing page missing (backend/static/index.html).</body></html>",
+            status_code=500,
+        )
+    return HTMLResponse(LANDING_FILE.read_text(encoding="utf-8"))
+
+
 @app.get("/auth/login")
 def auth_login():
     """Redirects the user to Google's OAuth consent screen."""
@@ -80,29 +101,25 @@ def auth_login():
 def auth_callback(code: Optional[str] = None, state: Optional[str] = None):
     """Google redirects here with ?code=...&state=... after the user grants access."""
     if not code or not state:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "You opened /auth/callback without a Google redirect. "
-                "Start here instead: http://localhost:8000/auth/login — "
-                "after you approve access, Google will send you back with ?code= and ?state= automatically."
-            ),
+        return _oauth_error_html(
+            "This page only works when Google redirects here after you approve access. "
+            "Open http://localhost:8000/ and click “Authorize Gmail”, or go to /auth/login.",
         )
     flow = _flows.pop(state, None)
     if not flow:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid or expired OAuth state (server restarted?). Open http://localhost:8000/auth/login again.",
+        return _oauth_error_html(
+            "The sign-in session expired (for example the API restarted). "
+            "Go to http://localhost:8000/auth/login and try again.",
         )
     try:
         flow.fetch_token(code=code)
     except Exception as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Could not complete sign-in: {e}",
-        ) from e
+        return _oauth_error_html(f"Could not complete sign-in: {e}")
     TOKEN_FILE.write_text(flow.credentials.to_json())
-    return {"status": "authenticated", "message": "You can close this tab."}
+    return HTMLResponse(
+        content=OAUTH_SUCCESS_FILE.read_text(encoding="utf-8"),
+        status_code=200,
+    )
 
 
 class QueryRequest(BaseModel):

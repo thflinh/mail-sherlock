@@ -3,6 +3,9 @@
   "name": "mail-sherlock",
   "version": "1.0.0",
   "description": "Find any email by describing it in plain English.",
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com;"
+  },
   "action": {
     "default_popup": "src/popup/popup.html"
   },

@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>mail-sherlock — search your inbox by meaning</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg: #060608;
+        --bg-elev: #0e1018;
+        --border: rgba(255, 255, 255, 0.06);
+        --text: #ececf1;
+        --muted: #7c7c8a;
+        --accent: #6366f1;
+        --accent-soft: rgba(99, 102, 241, 0.12);
+        --glow: rgba(99, 102, 241, 0.45);
+        --glow-strong: rgba(129, 140, 248, 0.25);
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        font-family: "DM Sans", system-ui, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        line-height: 1.6;
+        min-height: 100vh;
+        overflow-x: hidden;
+      }
+
+      /* subtle grid + vignette */
+      .noise-bg {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        background-image:
+          radial-gradient(ellipse 80% 50% at 50% -20%, var(--glow-strong), transparent),
+          radial-gradient(ellipse 60% 40% at 100% 50%, rgba(99, 102, 241, 0.06), transparent),
+          linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+        background-size:
+          100% 100%,
+          100% 100%,
+          48px 48px,
+          48px 48px;
+        z-index: 0;
+      }
+
+      .wrap {
+        position: relative;
+        z-index: 1;
+        max-width: 720px;
+        margin: 0 auto;
+        padding: 3rem 1.5rem 5rem;
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 4rem;
+        opacity: 0;
+        animation: fadeUp 0.8s ease forwards;
+      }
+
+      .mark {
+        display: flex;
+        align-items: center;
+        gap: 0.65rem;
+      }
+
+      .mark svg {
+        width: 28px;
+        height: 28px;
+        filter: drop-shadow(0 0 12px var(--glow));
+      }
+
+      .mark span {
+        font-family: "Instrument Serif", Georgia, serif;
+        font-size: 1.35rem;
+        letter-spacing: -0.02em;
+      }
+
+      .badge {
+        font-size: 0.65rem;
+        font-weight: 600;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--muted);
+        padding: 0.35rem 0.65rem;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.03);
+      }
+
+      .hero {
+        text-align: center;
+        margin-bottom: 4rem;
+      }
+
+      .hero h1 {
+        font-family: "Instrument Serif", Georgia, serif;
+        font-size: clamp(2.5rem, 8vw, 3.75rem);
+        font-weight: 400;
+        line-height: 1.1;
+        letter-spacing: -0.03em;
+        margin-bottom: 1.25rem;
+        opacity: 0;
+        animation: fadeUp 0.8s ease 0.1s forwards;
+        text-shadow:
+          0 0 40px var(--glow),
+          0 0 80px rgba(99, 102, 241, 0.15);
+      }
+
+      .hero h1 em {
+        font-style: italic;
+        color: #a5b4fc;
+      }
+
+      .hero p.lead {
+        font-size: 1.05rem;
+        color: var(--muted);
+        max-width: 28rem;
+        margin: 0 auto 2rem;
+        opacity: 0;
+        animation: fadeUp 0.8s ease 0.2s forwards;
+      }
+
+      .cta-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        justify-content: center;
+        opacity: 0;
+        animation: fadeUp 0.8s ease 0.35s forwards;
+      }
+
+      a.btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.5rem;
+        padding: 0.85rem 1.5rem;
+        font-family: inherit;
+        font-size: 0.9rem;
+        font-weight: 600;
+        text-decoration: none;
+        border-radius: 10px;
+        transition:
+          box-shadow 0.25s ease,
+          transform 0.2s ease,
+          background 0.2s ease;
+      }
+
+      a.btn-primary {
+        color: #fff;
+        background: linear-gradient(145deg, #4f46e5, #4338ca);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        box-shadow:
+          0 0 0 1px rgba(99, 102, 241, 0.3),
+          0 8px 32px -8px var(--glow),
+          0 0 48px -12px rgba(99, 102, 241, 0.5);
+      }
+
+      a.btn-primary:hover {
+        transform: translateY(-2px);
+        box-shadow:
+          0 0 0 1px rgba(129, 140, 248, 0.5),
+          0 12px 40px -8px var(--glow),
+          0 0 64px -8px rgba(99, 102, 241, 0.55);
+      }
+
+      a.btn-ghost {
+        color: var(--muted);
+        border: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.02);
+      }
+
+      a.btn-ghost:hover {
+        color: var(--text);
+        border-color: rgba(255, 255, 255, 0.12);
+        background: rgba(255, 255, 255, 0.04);
+      }
+
+      section {
+        margin-bottom: 3rem;
+        opacity: 0;
+        animation: fadeUp 0.8s ease 0.45s forwards;
+      }
+
+      section h2 {
+        font-family: "Instrument Serif", Georgia, serif;
+        font-size: 1.35rem;
+        font-weight: 400;
+        margin-bottom: 1rem;
+        color: #c7c7d1;
+      }
+
+      .cards {
+        display: grid;
+        gap: 1rem;
+      }
+
+      @media (min-width: 560px) {
+        .cards {
+          grid-template-columns: repeat(3, 1fr);
+        }
+      }
+
+      .card {
+        padding: 1.25rem;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        background: var(--bg-elev);
+        box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.04);
+        transition: box-shadow 0.25s ease;
+      }
+
+      .card:hover {
+        box-shadow:
+          0 0 0 1px rgba(99, 102, 241, 0.12),
+          0 8px 40px -16px var(--glow);
+      }
+
+      .card h3 {
+        font-size: 0.8rem;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: #a5b4fc;
+        margin-bottom: 0.5rem;
+      }
+
+      .card p {
+        font-size: 0.85rem;
+        color: var(--muted);
+        line-height: 1.55;
+      }
+
+      .panel {
+        padding: 1.5rem;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        background: linear-gradient(160deg, var(--accent-soft), transparent 60%);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+      }
+
+      .panel h2 {
+        margin-bottom: 0.75rem;
+      }
+
+      .panel ul {
+        list-style: none;
+        font-size: 0.88rem;
+        color: var(--muted);
+      }
+
+      .panel li {
+        padding: 0.5rem 0;
+        padding-left: 1.25rem;
+        position: relative;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .panel li:last-child {
+        border-bottom: none;
+      }
+
+      .panel li::before {
+        content: "◆";
+        position: absolute;
+        left: 0;
+        font-size: 0.5rem;
+        top: 0.85rem;
+        color: var(--accent);
+        filter: drop-shadow(0 0 6px var(--glow));
+      }
+
+      .panel strong {
+        color: #c4c4d4;
+        font-weight: 500;
+      }
+
+      footer {
+        text-align: center;
+        padding-top: 2rem;
+        font-size: 0.75rem;
+        color: #5c5c6a;
+        opacity: 0;
+        animation: fadeUp 0.8s ease 0.55s forwards;
+      }
+
+      footer a {
+        color: #818cf8;
+        text-decoration: none;
+      }
+
+      footer a:hover {
+        text-decoration: underline;
+      }
+
+      @keyframes fadeUp {
+        from {
+          opacity: 0;
+          transform: translateY(12px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="noise-bg" aria-hidden="true"></div>
+    <div class="wrap">
+      <header>
+        <div class="mark">
+          <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <circle cx="14" cy="14" r="9" stroke="#818cf8" stroke-width="1.5" opacity="0.9" />
+            <line x1="21" y1="21" x2="28" y2="28" stroke="#818cf8" stroke-width="2" stroke-linecap="round" />
+            <circle cx="14" cy="14" r="3" fill="#6366f1" opacity="0.6" />
+          </svg>
+          <span>Mail Sherlock</span>
+        </div>
+        <span class="badge">Read-only · Local API</span>
+      </header>
+
+      <main>
+        <div class="hero">
+          <h1>Describe the clue.<br /><em>Find the message.</em></h1>
+          <p class="lead">
+            Type what you’re looking for in plain English—you remember the <em>idea</em>, not the exact subject or
+            who sent it. The assistant runs locally and only reads your emails to help you find them—no more endless Gmail scrolling.
+          </p>
+          <div class="cta-row">
+            <a class="btn btn-primary" href="/auth/login">Authorize Gmail</a>
+            <a class="btn btn-ghost" href="#before">What you need</a>
+          </div>
+        </div>
+
+        <section>
+          <h2>The method</h2>
+          <div class="cards">
+            <div class="card">
+              <h3>Observe</h3>
+              <p>Type what you recall—“landlord lease,” “interview Tuesday,” “Amazon keyboard”—even if those words never appear in the email.</p>
+            </div>
+            <div class="card">
+              <h3>Deduce</h3>
+              <p>Embeddings rank messages by <em>meaning</em>, so vague memories still surface the right thread.</p>
+            </div>
+            <div class="card">
+              <h3>Open</h3>
+              <p>Jump from a result straight into Gmail in the account you authorized—no guesswork about which profile opened.</p>
+            </div>
+          </div>
+        </section>
+
+        <section id="before" class="panel">
+          <h2>Before you investigate</h2>
+          <ul>
+            <li>
+              <strong>Run the API</strong> — Start the FastAPI server on port <strong>8000</strong> (see README). This page and OAuth live on the same host.
+            </li>
+            <li>
+              <strong>Authorize once</strong> — “Authorize Gmail” sends you through Google’s consent screen. We request <strong>read-only</strong> access so the tool can sync and index mail—not send mail on your behalf. If Google says the app is “being tested,” your Gmail must be added as a <strong>Test user</strong> in Google Cloud (OAuth consent screen) unless the app is published and verified—see the README.
+            </li>
+            <li>
+              <strong>Sync your index</strong> — After login, call <code style="color: #a5b4fc">POST /emails/sync</code> (e.g. from README) so the database has messages to search.
+            </li>
+            <li>
+              <strong>Use the extension</strong> — Load the built <code style="color: #a5b4fc">dist/</code> folder in Chrome, then search from the toolbar popup while the API stays running.
+            </li>
+          </ul>
+        </section>
+
+        <footer>
+          <p>
+            OAuth tokens stay on this machine (<code style="color: #6b6b7a">token.json</code>). Full setup is in the
+            project README.
+          </p>
+        </footer>
+      </main>
+    </div>
+  </body>
+</html>

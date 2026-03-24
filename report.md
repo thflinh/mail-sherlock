@@ -27,6 +27,9 @@ This report describes the **purpose** and **function** of project-owned files (n
 | **`embeddings.py`** | ML model | Loads **SentenceTransformer** `all-MiniLM-L6-v2`; **`encode()`** for text → normalized vectors; **`cosine_similarity`** as dot product; **`add_embeddings_inplace()`** / **`embeddings_ready()`** / **`document_search_text()`** for stored vectors and search. |
 | **`emails.json`** | Mock data | JSON array of sample emails (subject, body, etc.) for demos and **`/emails/seed`** when Gmail is not used. |
 | **`requirements.txt`** | Python dependencies | Pins FastAPI, uvicorn, sentence-transformers, torch, motor, pymongo, certifi, google APIs, etc. |
+| **`static/index.html`** | Marketing landing | Dark, minimal “sherlock” themed page served at **`GET /`**; CTA links to **`/auth/login`**. |
+| **`static/oauth_success.html`** | OAuth success UI | Shown after **`/auth/callback`** saves `token.json` (replaces raw JSON). |
+| **`static/oauth_error.html`** | OAuth error UI | Template for failed callback (missing params, bad state, token exchange error). |
 | **`.env`** *(local, gitignored)* | Secrets / config | `MONGODB_URI`, optional `MONGODB_TLS_INSECURE`, `DB_MAIL`. |
 | **`credentials.json`** *(local, gitignored)* | Google OAuth client | OAuth **client ID/secret** JSON from Google Cloud Console for Gmail API—**not** end-user mail content. |
 | **`token.json`** *(local, gitignored)* | OAuth refresh token | Written after successful **`/auth/callback`**; authorizes **`/emails/sync`** for the user who completed login on this machine. |

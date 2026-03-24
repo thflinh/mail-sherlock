@@ -1,13 +1,25 @@
-from sentence_transformers import SentenceTransformer
 import numpy as np
 
-model = SentenceTransformer("all-MiniLM-L6-v2")
+# all-MiniLM-L6-v2 — fixed size; avoids loading PyTorch/transformers at import time.
+EMBEDDING_DIM: int = 384
 
-EMBEDDING_DIM: int = int(model.get_sentence_embedding_dimension())
+_model = None
+
+
+def _get_model():
+    """Load SentenceTransformer on first use so OAuth/landing/health start without heavy imports."""
+    global _model
+    if _model is None:
+        from sentence_transformers import SentenceTransformer
+
+        _model = SentenceTransformer("all-MiniLM-L6-v2")
+    return _model
 
 
 def encode(texts: list[str]) -> np.ndarray:
-    return model.encode(texts, convert_to_numpy=True, normalize_embeddings=True)
+    return _get_model().encode(
+        texts, convert_to_numpy=True, normalize_embeddings=True
+    )
 
 
 def cosine_similarity(query_vec: np.ndarray, email_vecs: np.ndarray) -> np.ndarray:

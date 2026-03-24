@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>mail-sherlock — sign-in issue</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg: #060608;
+        --border: rgba(255, 255, 255, 0.06);
+        --text: #ececf1;
+        --muted: #7c7c8a;
+        --accent: #6366f1;
+        --glow: rgba(99, 102, 241, 0.35);
+        --glow-strong: rgba(248, 113, 113, 0.12);
+        --bad: #f87171;
+      }
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        font-family: "DM Sans", system-ui, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        line-height: 1.6;
+        min-height: 100vh;
+      }
+      .noise-bg {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        background-image:
+          radial-gradient(ellipse 70% 45% at 50% -15%, var(--glow), transparent),
+          radial-gradient(ellipse 50% 35% at 10% 70%, var(--glow-strong), transparent),
+          linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+        background-size: 100% 100%, 100% 100%, 48px 48px, 48px 48px;
+        z-index: 0;
+      }
+      .wrap {
+        position: relative;
+        z-index: 1;
+        max-width: 520px;
+        margin: 0 auto;
+        padding: 2.5rem 1.5rem 4rem;
+        text-align: center;
+      }
+      .mark {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-bottom: 2rem;
+      }
+      .mark svg {
+        width: 26px;
+        height: 26px;
+        filter: drop-shadow(0 0 10px var(--glow));
+      }
+      .mark span {
+        font-family: "Instrument Serif", Georgia, serif;
+        font-size: 1.2rem;
+      }
+      .seal {
+        width: 88px;
+        height: 88px;
+        margin: 0 auto 1.5rem;
+        border-radius: 50%;
+        background: radial-gradient(circle at 30% 30%, rgba(248, 113, 113, 0.2), rgba(15, 23, 42, 0.95));
+        border: 1px solid rgba(248, 113, 113, 0.35);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 0 48px -16px rgba(248, 113, 113, 0.35);
+      }
+      .seal svg {
+        width: 38px;
+        height: 38px;
+        stroke: var(--bad);
+      }
+      h1 {
+        font-family: "Instrument Serif", Georgia, serif;
+        font-size: clamp(1.5rem, 5vw, 2rem);
+        font-weight: 400;
+        margin-bottom: 1rem;
+        color: #fca5a5;
+      }
+      .msg {
+        text-align: left;
+        padding: 1.25rem 1.35rem;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        background: rgba(14, 16, 24, 0.9);
+        font-size: 0.88rem;
+        color: var(--muted);
+        margin-bottom: 2rem;
+        word-break: break-word;
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        justify-content: center;
+      }
+      a.btn {
+        display: inline-flex;
+        padding: 0.75rem 1.35rem;
+        font-size: 0.88rem;
+        font-weight: 600;
+        text-decoration: none;
+        border-radius: 10px;
+        transition: transform 0.2s ease;
+      }
+      a.btn-primary {
+        color: #fff;
+        background: linear-gradient(145deg, #4f46e5, #4338ca);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        box-shadow: 0 8px 32px -8px var(--glow);
+      }
+      a.btn-primary:hover {
+        transform: translateY(-2px);
+      }
+      a.btn-ghost {
+        color: var(--muted);
+        border: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.03);
+        box-shadow: none;
+      }
+      a.btn-ghost:hover {
+        color: var(--text);
+        border-color: rgba(255, 255, 255, 0.12);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="noise-bg" aria-hidden="true"></div>
+    <div class="wrap">
+      <div class="mark">
+        <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="14" cy="14" r="9" stroke="#818cf8" stroke-width="1.5" opacity="0.9" />
+          <line x1="21" y1="21" x2="28" y2="28" stroke="#818cf8" stroke-width="2" stroke-linecap="round" />
+        </svg>
+        <span>mail-sherlock</span>
+      </div>
+
+      <div class="seal" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round">
+          <circle cx="12" cy="12" r="10" />
+          <line x1="15" y1="9" x2="9" y2="15" />
+          <line x1="9" y1="9" x2="15" y2="15" />
+        </svg>
+      </div>
+
+      <h1>Sign-in didn’t stick</h1>
+      <div class="msg">###ERROR_MESSAGE###</div>
+      <div class="actions">
+        <a class="btn btn-primary" href="/auth/login">Try Authorize Gmail again</a>
+        <a class="btn btn-ghost" href="/">Home</a>
+      </div>
+    </div>
+  </body>
+</html>

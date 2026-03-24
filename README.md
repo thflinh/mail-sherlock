@@ -51,6 +51,8 @@ Or: `uvicorn main:app --reload --host 0.0.0.0 --port 8000`
 
 API base: **http://localhost:8000**
 
+**Landing page:** open **`http://localhost:8000/`** (or `http://127.0.0.1:8000/`) in a browser for a short product intro, setup notes, and **Authorize Gmail** (same host as `/auth/login`).
+
 **Populate email data** (pick one):
 
 | Method | How |
@@ -76,6 +78,25 @@ API base: **http://localhost:8000**
    Expect `synced` with a number (up to **500** latest messages per sync). Search then uses **your** mail; extension **Open in Gmail** links work when `threadId` is stored.
 
 If sync returns **401**, do step 6 again. If **login** returns **500** about missing credentials, add `credentials.json`. If Google shows **redirect_uri_mismatch**, fix the URI in Cloud Console to match step 2 exactly.
+
+#### “Access blocked” / **Error 403: access_denied** (Testing mode)
+
+While the OAuth app is in **Testing** (default for new projects), **only** Google accounts listed as **Test users** can click **Authorize Gmail**. Everyone else gets *Mail Sherlock has not completed the Google verification process* / *only accessed by developer-approved testers*.
+
+**Let a specific person use the app (quick fix):**
+
+1. Open [Google Cloud Console](https://console.cloud.google.com/) → **APIs & Services** → **OAuth consent screen**.
+2. Scroll to **Test users** → **+ Add users**.
+3. Add their full Gmail address (e.g. `friend@gmail.com`) → **Save**.
+
+They can try **Authorize Gmail** again (they may need to pick the right Google account).
+
+**Let any Google account use it (production):**
+
+1. Same **OAuth consent screen** → **Publishing status** → **Publish app** (confirm the dialog).
+2. Gmail uses **sensitive/restricted** scopes. For the general public, Google usually requires **[OAuth verification](https://support.google.com/cloud/answer/9110914)** (privacy policy, app homepage, sometimes a demo video). Until verification is approved, users may see extra warnings or limits depending on scope and audience.
+
+For a **small team**, adding Test users is enough; for **public** distribution, plan for verification and a privacy policy URL on the consent screen.
 
 First run downloads the sentence-transformer model (~90MB+); startup can take a minute.
 
@@ -133,6 +154,18 @@ The extension used to show that message for **any** failure (including HTTP 500/
   Check: `GET http://127.0.0.1:8000/health` should return `{"ok":true,"database":"up"}` when the DB is reachable.
 
 - **No data:** Run `POST /emails/seed` or Gmail `POST /emails/sync` so `/ask` has documents to search.
+
+### `KeyboardInterrupt` or long hangs while the server “reloads”
+
+With **`uvicorn --reload`** (or `python main.py` when it enables reload), each restart **re-imports** the app. The ML stack is heavy; if you press **Ctrl+C** or save files repeatedly during that window, you can see **`KeyboardInterrupt`** deep inside `transformers` / `huggingface_hub` — that is the reload being interrupted, not a broken install.
+
+**Mitigations:**
+
+- Wait until you see **`Application startup complete`** before hitting OAuth again.
+- For a faster, calmer dev loop, run **without** auto-reload:  
+  `uvicorn main:app --host 0.0.0.0 --port 8000`  
+  (no `--reload`). Restart manually after code changes.
+- The embedding model is loaded **on first search or seed/sync** that needs it, so the API process starts quickly; the **first** `/ask` or embed after startup may still take a moment while PyTorch loads.
 
 ### Hugging Face / PyTorch “UNEXPECTED … embeddings.position_ids”
 
