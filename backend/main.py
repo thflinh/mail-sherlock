@@ -7,6 +7,7 @@ from typing import Literal, Optional
 import html
 import json
 import numpy as np
+import os
 from pathlib import Path
 from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
@@ -91,7 +92,7 @@ def auth_login():
     flow = Flow.from_client_secrets_file(
         CREDENTIALS_FILE,
         scopes=SCOPES,
-        redirect_uri="http://localhost:8000/auth/callback",
+        redirect_uri=os.getenv("BACKEND_URL", "http://localhost:8000").rstrip("/") + "/auth/callback",
     )
     auth_url, state = flow.authorization_url(prompt="consent", access_type="offline")
     _flows[state] = flow
