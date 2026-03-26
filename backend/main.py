@@ -27,13 +27,46 @@ from embeddings import (
 from agent_search import understand_query
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
-CREDENTIALS_FILE = Path(__file__).parent / "credentials.json"
-TOKEN_FILE = Path(__file__).parent / "token.json"
+CREDENTIALS_FILE = Path(__file__).parent / "credentials.json"  # local dev fallback
+TOKEN_FILE = Path(__file__).parent / "token.json"               # local dev fallback
 
 SETTINGS_DOC_ID = "oauth"
+TOKEN_DOC_ID = "oauth_token"
 LANDING_FILE = Path(__file__).parent / "static" / "index.html"
 OAUTH_SUCCESS_FILE = Path(__file__).parent / "static" / "oauth_success.html"
 OAUTH_ERROR_FILE = Path(__file__).parent / "static" / "oauth_error.html"
+
+
+def _load_credentials_config() -> dict:
+    """Load Google OAuth client config from env var, falling back to local file."""
+    raw = os.getenv("GOOGLE_CREDENTIALS_JSON", "").strip()
+    if raw:
+        return json.loads(raw)
+    if CREDENTIALS_FILE.exists():
+        return json.loads(CREDENTIALS_FILE.read_text())
+    raise RuntimeError(
+        "Google OAuth credentials not found. "
+        "Set GOOGLE_CREDENTIALS_JSON env var or place credentials.json in the backend folder."
+    )
+
+
+async def _load_token(db) -> Optional[Credentials]:
+    """Load OAuth token from MongoDB, falling back to local token.json for dev."""
+    doc = await db["settings"].find_one({"_id": TOKEN_DOC_ID})
+    if doc and doc.get("token_json"):
+        return Credentials.from_authorized_user_info(json.loads(doc["token_json"]), SCOPES)
+    if TOKEN_FILE.exists():
+        return Credentials.from_authorized_user_file(str(TOKEN_FILE), SCOPES)
+    return None
+
+
+async def _save_token(db, creds: Credentials) -> None:
+    """Persist OAuth token to MongoDB so it survives server restarts."""
+    await db["settings"].update_one(
+        {"_id": TOKEN_DOC_ID},
+        {"$set": {"token_json": creds.to_json()}},
+        upsert=True,
+    )
 
 
 def _oauth_error_html(message: str, status_code: int = 400) -> HTMLResponse:
@@ -84,13 +117,12 @@ def landing_page():
 @app.get("/auth/login")
 def auth_login():
     """Redirects the user to Google's OAuth consent screen."""
-    if not CREDENTIALS_FILE.exists():
-        raise HTTPException(
-            status_code=500,
-            detail=f"Missing {CREDENTIALS_FILE.name}. Add the OAuth client JSON from Google Cloud Console (see README).",
-        )
-    flow = Flow.from_client_secrets_file(
-        CREDENTIALS_FILE,
+    try:
+        config = _load_credentials_config()
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    flow = Flow.from_client_config(
+        config,
         scopes=SCOPES,
         redirect_uri=os.getenv("BACKEND_URL", "http://localhost:8000").rstrip("/") + "/auth/callback",
     )
@@ -100,12 +132,12 @@ def auth_login():
 
 
 @app.get("/auth/callback")
-def auth_callback(code: Optional[str] = None, state: Optional[str] = None):
+async def auth_callback(code: Optional[str] = None, state: Optional[str] = None):
     """Google redirects here with ?code=...&state=... after the user grants access."""
     if not code or not state:
         return _oauth_error_html(
             "This page only works when Google redirects here after you approve access. "
-            "Open http://localhost:8000/ and click “Authorize Gmail”, or go to /auth/login.",
+            'Open http://localhost:8000/ and click "Authorize Gmail", or go to /auth/login.',
         )
     flow = _flows.pop(state, None)
     if not flow:
@@ -117,7 +149,7 @@ def auth_callback(code: Optional[str] = None, state: Optional[str] = None):
         flow.fetch_token(code=code)
     except Exception as e:
         return _oauth_error_html(f"Could not complete sign-in: {e}")
-    TOKEN_FILE.write_text(flow.credentials.to_json())
+    await _save_token(get_db(), flow.credentials)
     return HTMLResponse(
         content=OAUTH_SUCCESS_FILE.read_text(encoding="utf-8"),
         status_code=200,
@@ -272,13 +304,13 @@ async def health():
 @app.post("/emails/sync")
 async def sync_emails():
     """Fetch real emails from Gmail and store them in MongoDB."""
-    if not TOKEN_FILE.exists():
+    db = get_db()
+    creds = await _load_token(db)
+    if not creds:
         raise HTTPException(
             status_code=401,
-            detail="Not authenticated. Open http://127.0.0.1:8000/auth/login in a browser, finish Google sign-in, then POST /emails/sync again.",
+            detail="Not authenticated. Visit /auth/login to connect your Gmail account.",
         )
-
-    creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
     service = build("gmail", "v1", credentials=creds)
 
     profile = service.users().getProfile(userId="me").execute()
@@ -316,7 +348,6 @@ async def sync_emails():
 
     add_embeddings_inplace(emails)
 
-    db = get_db()
     try:
         await db["emails"].delete_many({})
         await db["emails"].insert_many(emails)
