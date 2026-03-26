@@ -22,6 +22,7 @@ from embeddings import (
     document_search_text,
     embeddings_ready,
     encode,
+    warmup,
 )
 from agent_search import understand_query
 
@@ -85,6 +86,8 @@ async def _get_stored_gmail_address(db) -> Optional[str]:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await connect_db()
+    import asyncio
+    await asyncio.get_event_loop().run_in_executor(None, warmup)
     yield
     await close_db()
 

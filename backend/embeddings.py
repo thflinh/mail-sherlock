@@ -41,6 +41,11 @@ def add_embeddings_inplace(docs: list[dict]) -> None:
         d["embedding"] = vecs[i].astype(np.float32).tolist()
 
 
+def warmup() -> None:
+    """Load the model into memory now so the first search request is instant."""
+    _get_model()
+
+
 def embeddings_ready(docs: list[dict]) -> bool:
     return all(
         isinstance(d.get("embedding"), list) and len(d["embedding"]) == EMBEDDING_DIM
