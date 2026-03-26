@@ -28,7 +28,7 @@ def cosine_similarity(query_vec: np.ndarray, email_vecs: np.ndarray) -> np.ndarr
 
 
 def document_search_text(doc: dict) -> str:
-    return f"{doc.get('subject', '')} {doc.get('body', '')}"
+    return f"From: {doc.get('sender', '')} Subject: {doc.get('subject', '')} {doc.get('body', '')}"
 
 
 def add_embeddings_inplace(docs: list[dict]) -> None:

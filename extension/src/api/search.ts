@@ -1,6 +1,31 @@
 // Use 127.0.0.1 so Windows does not prefer IPv6 (::1) while uvicorn listens on IPv4.
 const API_URL = "http://127.0.0.1:8000";
 
+/** POST to local API — from content scripts, use background proxy to avoid Chrome’s “site wants to access local network” prompt. */
+async function apiPost(path: "/ask" | "/chat", body: object): Promise<Response> {
+  const bodyStr = JSON.stringify(body);
+  if (typeof chrome !== "undefined" && chrome.runtime?.id) {
+    const r = (await chrome.runtime.sendMessage({
+      type: "MAIL_SHERLOCK_API",
+      path,
+      body: bodyStr,
+    })) as { status: number; bodyText: string; error?: string };
+    if (r.error) {
+      const hint =
+        r.error.includes("Failed to fetch") || r.error.includes("NetworkError")
+          ? " (network error — is the backend running on port 8000?)"
+          : "";
+      throw new Error(`${r.error}${hint}`);
+    }
+    return new Response(r.bodyText, { status: r.status });
+  }
+  return fetch(`${API_URL}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: bodyStr,
+  });
+}
+
 export interface EmailResult {
   id: string;
   /** Gmail thread id — present after Gmail sync; used to open the thread in the web app. */
@@ -32,6 +57,15 @@ export interface SearchResponse {
   gmailAuthEmail?: string | null;
 }
 
+export interface ChatApiMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface ChatResponse extends SearchResponse {
+  reply: string;
+}
+
 async function errorMessageFromResponse(res: Response): Promise<string> {
   const text = await res.text();
   try {
@@ -53,11 +87,30 @@ export async function searchEmails(
 ): Promise<SearchResponse> {
   let res: Response;
   try {
-    res = await fetch(`${API_URL}/ask`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, top_k: topK }),
-    });
+    res = await apiPost("/ask", { query, top_k: topK });
+  } catch (e) {
+    const hint =
+      e instanceof TypeError
+        ? " (network error — is the backend running on port 8000?)"
+        : "";
+    throw new Error(`${e instanceof Error ? e.message : String(e)}${hint}`);
+  }
+
+  if (!res.ok) {
+    const detail = await errorMessageFromResponse(res);
+    throw new Error(`Request failed (${res.status}): ${detail}`);
+  }
+
+  return res.json();
+}
+
+export async function chatSearch(
+  messages: ChatApiMessage[],
+  topK = 5
+): Promise<ChatResponse> {
+  let res: Response;
+  try {
+    res = await apiPost("/chat", { messages, top_k: topK });
   } catch (e) {
     const hint =
       e instanceof TypeError

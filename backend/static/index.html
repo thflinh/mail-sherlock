@@ -3,399 +3,1003 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>mail-sherlock — search your inbox by meaning</title>
+    <title>mail-sherlock — find emails by meaning</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
     <style>
+      /* ── Design tokens ─────────────────────────────── */
       :root {
-        --bg: #060608;
-        --bg-elev: #0e1018;
-        --border: rgba(255, 255, 255, 0.06);
-        --text: #ececf1;
-        --muted: #7c7c8a;
-        --accent: #6366f1;
-        --accent-soft: rgba(99, 102, 241, 0.12);
-        --glow: rgba(99, 102, 241, 0.45);
-        --glow-strong: rgba(129, 140, 248, 0.25);
+        --bg:            #F5F8FF;
+        --surface:       #FFFFFF;
+        --sidebar:       #EDF3FF;
+        --primary:       #5B8DEF;
+        --primary-hover: #467AE6;
+        --primary-soft:  #DCE9FF;
+        --accent:        #6F6AEF;
+        --accent-soft:   #E9E8FF;
+        --text:          #0F172A;
+        --text2:         #475569;
+        --muted:         #64748B;
+        --border:        #DEE6F3;
+        --divider:       #C9D6EA;
+        --match:         #FFF4C2;
+
+        --radius-card:   16px;
+        --radius-btn:    8px;
+        --shadow-card:   0 2px 16px rgba(91,141,239,0.10), 0 0 0 1px var(--border);
+        --shadow-card-hover: 0 6px 32px rgba(91,141,239,0.16), 0 0 0 1px #C7D7F8;
       }
 
-      * {
-        box-sizing: border-box;
-        margin: 0;
-        padding: 0;
-      }
-
-      html {
-        scroll-behavior: smooth;
-      }
-
+      /* ── Reset ─────────────────────────────────────── */
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+      html { scroll-behavior: smooth; scroll-padding-top: 5rem; }
       body {
-        font-family: "DM Sans", system-ui, sans-serif;
+        font-family: "Inter", system-ui, sans-serif;
         background: var(--bg);
         color: var(--text);
+        font-size: 16px;
         line-height: 1.6;
         min-height: 100vh;
         overflow-x: hidden;
+        -webkit-font-smoothing: antialiased;
       }
+      a { color: inherit; }
 
-      /* subtle grid + vignette */
-      .noise-bg {
-        position: fixed;
-        inset: 0;
-        pointer-events: none;
-        background-image:
-          radial-gradient(ellipse 80% 50% at 50% -20%, var(--glow-strong), transparent),
-          radial-gradient(ellipse 60% 40% at 100% 50%, rgba(99, 102, 241, 0.06), transparent),
-          linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
-          linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
-        background-size:
-          100% 100%,
-          100% 100%,
-          48px 48px,
-          48px 48px;
-        z-index: 0;
+      /* ── Nav ───────────────────────────────────────── */
+      .nav {
+        position: sticky;
+        top: 0;
+        z-index: 100;
+        background: rgba(255,255,255,0.92);
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
+        border-bottom: 1px solid var(--border);
       }
-
-      .wrap {
-        position: relative;
-        z-index: 1;
-        max-width: 720px;
+      .nav__inner {
+        max-width: 1120px;
         margin: 0 auto;
-        padding: 3rem 1.5rem 5rem;
-      }
-
-      header {
+        padding: 0 1.5rem;
+        height: 60px;
         display: flex;
         align-items: center;
-        justify-content: space-between;
-        margin-bottom: 4rem;
-        opacity: 0;
-        animation: fadeUp 0.8s ease forwards;
+        gap: 2rem;
       }
-
-      .mark {
+      .nav__brand {
         display: flex;
         align-items: center;
-        gap: 0.65rem;
-      }
-
-      .mark svg {
-        width: 28px;
-        height: 28px;
-        filter: drop-shadow(0 0 12px var(--glow));
-      }
-
-      .mark span {
-        font-family: "Instrument Serif", Georgia, serif;
-        font-size: 1.35rem;
-        letter-spacing: -0.02em;
-      }
-
-      .badge {
-        font-size: 0.65rem;
-        font-weight: 600;
-        letter-spacing: 0.14em;
-        text-transform: uppercase;
-        color: var(--muted);
-        padding: 0.35rem 0.65rem;
-        border: 1px solid var(--border);
-        border-radius: 999px;
-        background: rgba(255, 255, 255, 0.03);
-      }
-
-      .hero {
-        text-align: center;
-        margin-bottom: 4rem;
-      }
-
-      .hero h1 {
-        font-family: "Instrument Serif", Georgia, serif;
-        font-size: clamp(2.5rem, 8vw, 3.75rem);
-        font-weight: 400;
-        line-height: 1.1;
-        letter-spacing: -0.03em;
-        margin-bottom: 1.25rem;
-        opacity: 0;
-        animation: fadeUp 0.8s ease 0.1s forwards;
-        text-shadow:
-          0 0 40px var(--glow),
-          0 0 80px rgba(99, 102, 241, 0.15);
-      }
-
-      .hero h1 em {
-        font-style: italic;
-        color: #a5b4fc;
-      }
-
-      .hero p.lead {
+        gap: 0.5rem;
+        text-decoration: none;
+        font-weight: 700;
         font-size: 1.05rem;
-        color: var(--muted);
-        max-width: 28rem;
-        margin: 0 auto 2rem;
-        opacity: 0;
-        animation: fadeUp 0.8s ease 0.2s forwards;
+        color: var(--text);
+        flex-shrink: 0;
       }
-
-      .cta-row {
+      .nav__brand svg { width: 22px; height: 22px; flex-shrink: 0; }
+      .nav__links {
         display: flex;
-        flex-wrap: wrap;
-        gap: 0.75rem;
-        justify-content: center;
-        opacity: 0;
-        animation: fadeUp 0.8s ease 0.35s forwards;
+        align-items: center;
+        gap: 0.25rem;
+        list-style: none;
+        flex: 1;
       }
+      .nav__links a {
+        color: var(--muted);
+        text-decoration: none;
+        font-size: 0.875rem;
+        font-weight: 500;
+        padding: 0.35rem 0.65rem;
+        border-radius: 6px;
+        transition: color 0.15s, background 0.15s;
+      }
+      .nav__links a:hover { color: var(--text); background: var(--primary-soft); }
+      .nav__actions { display: flex; align-items: center; gap: 0.5rem; }
 
-      a.btn {
+      /* ── Buttons ───────────────────────────────────── */
+      .btn {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        gap: 0.5rem;
-        padding: 0.85rem 1.5rem;
+        gap: 0.4rem;
+        padding: 0.55rem 1.15rem;
         font-family: inherit;
-        font-size: 0.9rem;
+        font-size: 0.875rem;
         font-weight: 600;
+        border-radius: var(--radius-btn);
         text-decoration: none;
-        border-radius: 10px;
-        transition:
-          box-shadow 0.25s ease,
-          transform 0.2s ease,
-          background 0.2s ease;
+        cursor: pointer;
+        border: 1px solid transparent;
+        transition: background 0.18s, box-shadow 0.18s, transform 0.14s, border-color 0.18s;
+        white-space: nowrap;
       }
-
-      a.btn-primary {
+      .btn-primary {
+        background: var(--primary);
         color: #fff;
-        background: linear-gradient(145deg, #4f46e5, #4338ca);
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        box-shadow:
-          0 0 0 1px rgba(99, 102, 241, 0.3),
-          0 8px 32px -8px var(--glow),
-          0 0 48px -12px rgba(99, 102, 241, 0.5);
+        border-color: var(--primary);
       }
-
-      a.btn-primary:hover {
-        transform: translateY(-2px);
-        box-shadow:
-          0 0 0 1px rgba(129, 140, 248, 0.5),
-          0 12px 40px -8px var(--glow),
-          0 0 64px -8px rgba(99, 102, 241, 0.55);
+      .btn-primary:hover {
+        background: var(--primary-hover);
+        border-color: var(--primary-hover);
+        transform: translateY(-1px);
+        box-shadow: 0 4px 20px rgba(91,141,239,0.30);
       }
-
-      a.btn-ghost {
-        color: var(--muted);
-        border: 1px solid var(--border);
-        background: rgba(255, 255, 255, 0.02);
-      }
-
-      a.btn-ghost:hover {
+      .btn-primary:active { transform: none; box-shadow: none; }
+      .btn-secondary {
+        background: var(--surface);
         color: var(--text);
-        border-color: rgba(255, 255, 255, 0.12);
-        background: rgba(255, 255, 255, 0.04);
+        border-color: var(--border);
       }
-
-      section {
-        margin-bottom: 3rem;
-        opacity: 0;
-        animation: fadeUp 0.8s ease 0.45s forwards;
+      .btn-secondary:hover {
+        background: var(--bg);
+        border-color: var(--divider);
+        transform: translateY(-1px);
       }
-
-      section h2 {
-        font-family: "Instrument Serif", Georgia, serif;
-        font-size: 1.35rem;
-        font-weight: 400;
-        margin-bottom: 1rem;
-        color: #c7c7d1;
-      }
-
-      .cards {
-        display: grid;
-        gap: 1rem;
-      }
-
-      @media (min-width: 560px) {
-        .cards {
-          grid-template-columns: repeat(3, 1fr);
-        }
-      }
-
-      .card {
-        padding: 1.25rem;
-        border-radius: 12px;
-        border: 1px solid var(--border);
-        background: var(--bg-elev);
-        box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.04);
-        transition: box-shadow 0.25s ease;
-      }
-
-      .card:hover {
-        box-shadow:
-          0 0 0 1px rgba(99, 102, 241, 0.12),
-          0 8px 40px -16px var(--glow);
-      }
-
-      .card h3 {
-        font-size: 0.8rem;
-        font-weight: 600;
-        letter-spacing: 0.06em;
-        text-transform: uppercase;
-        color: #a5b4fc;
-        margin-bottom: 0.5rem;
-      }
-
-      .card p {
-        font-size: 0.85rem;
+      .btn-ghost {
+        background: transparent;
         color: var(--muted);
-        line-height: 1.55;
+        border-color: transparent;
       }
-
-      .panel {
-        padding: 1.5rem;
-        border-radius: 12px;
-        border: 1px solid var(--border);
-        background: linear-gradient(160deg, var(--accent-soft), transparent 60%);
-        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+      .btn-ghost:hover { background: var(--primary-soft); color: var(--text); }
+      .btn-text {
+        background: none;
+        border: none;
+        color: var(--primary);
+        font-size: 0.875rem;
+        font-weight: 600;
+        cursor: pointer;
+        padding: 0.35rem 0.65rem;
+        border-radius: 6px;
+        font-family: inherit;
       }
+      .btn-text:hover { background: var(--primary-soft); }
+      .btn-lg { padding: 0.75rem 1.5rem; font-size: 1rem; border-radius: 10px; }
 
-      .panel h2 {
+      /* ── Section wrap ──────────────────────────────── */
+      .section { padding: 5rem 1.5rem; }
+      .section--alt { background: var(--surface); }
+      .section--privacy { background: var(--sidebar); }
+      .container { max-width: 1120px; margin: 0 auto; }
+      .section-label {
+        font-size: 0.75rem;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--primary);
         margin-bottom: 0.75rem;
       }
-
-      .panel ul {
-        list-style: none;
-        font-size: 0.88rem;
-        color: var(--muted);
+      .section-heading {
+        font-family: "Instrument Serif", Georgia, serif;
+        font-size: clamp(1.75rem, 3vw, 2.25rem);
+        font-weight: 400;
+        letter-spacing: -0.025em;
+        color: var(--text);
+        margin-bottom: 0.75rem;
+      }
+      .section-sub {
+        font-size: 1rem;
+        color: var(--text2);
+        max-width: 36rem;
+        line-height: 1.65;
       }
 
-      .panel li {
-        padding: 0.5rem 0;
-        padding-left: 1.25rem;
-        position: relative;
-        border-bottom: 1px solid var(--border);
+      /* ── Hero ──────────────────────────────────────── */
+      .hero {
+        padding: 5rem 1.5rem 4rem;
+        background: linear-gradient(180deg, #fff 0%, var(--bg) 100%);
       }
-
-      .panel li:last-child {
-        border-bottom: none;
+      .hero__inner {
+        max-width: 1120px;
+        margin: 0 auto;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 4rem;
+        align-items: center;
       }
-
-      .panel li::before {
-        content: "◆";
-        position: absolute;
-        left: 0;
-        font-size: 0.5rem;
-        top: 0.85rem;
-        color: var(--accent);
-        filter: drop-shadow(0 0 6px var(--glow));
+      @media (max-width: 768px) {
+        .hero__inner { grid-template-columns: 1fr; gap: 2.5rem; }
+        .hero__right { order: -1; }
       }
-
-      .panel strong {
-        color: #c4c4d4;
-        font-weight: 500;
+      .hero__eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        font-size: 0.78rem;
+        font-weight: 600;
+        color: var(--primary);
+        background: var(--primary-soft);
+        border: 1px solid #BDD2FD;
+        padding: 0.3rem 0.75rem;
+        border-radius: 999px;
+        margin-bottom: 1.5rem;
       }
-
-      footer {
-        text-align: center;
-        padding-top: 2rem;
-        font-size: 0.75rem;
-        color: #5c5c6a;
+      .hero__eyebrow::before {
+        content: "";
+        width: 6px; height: 6px;
+        border-radius: 50%;
+        background: var(--primary);
+        flex-shrink: 0;
+      }
+      .hero h1 {
+        font-family: "Instrument Serif", Georgia, serif;
+        font-size: clamp(2.25rem, 5vw, 3.25rem);
+        font-weight: 400;
+        line-height: 1.1;
+        letter-spacing: -0.03em;
+        color: var(--text);
+        margin-bottom: 1.25rem;
         opacity: 0;
-        animation: fadeUp 0.8s ease 0.55s forwards;
+        animation: fadeUp 0.65s ease 0.05s forwards;
+      }
+      .hero h1 em { font-style: italic; color: var(--primary); }
+      .hero__sub {
+        font-size: 1.05rem;
+        color: var(--text2);
+        line-height: 1.65;
+        margin-bottom: 2rem;
+        max-width: 28rem;
+        opacity: 0;
+        animation: fadeUp 0.65s ease 0.15s forwards;
+      }
+      .hero__cta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.65rem;
+        margin-bottom: 1.25rem;
+        opacity: 0;
+        animation: fadeUp 0.65s ease 0.25s forwards;
+      }
+      .hero__trust {
+        font-size: 0.78rem;
+        color: var(--muted);
+        opacity: 0;
+        animation: fadeUp 0.65s ease 0.35s forwards;
+      }
+      .hero__trust span { margin: 0 0.35rem; }
+
+      /* ── Mock / live search card ───────────────────── */
+      .search-card {
+        background: var(--surface);
+        border-radius: var(--radius-card);
+        box-shadow: var(--shadow-card);
+        padding: 1.25rem;
+        opacity: 0;
+        animation: fadeUp 0.65s ease 0.2s forwards;
+      }
+      .sc-bar {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        background: var(--bg);
+        border: 1.5px solid var(--border);
+        border-radius: 10px;
+        padding: 0.4rem 0.5rem 0.4rem 0.85rem;
+        margin-bottom: 1rem;
+        transition: border-color 0.2s, box-shadow 0.2s;
+      }
+      .sc-bar:focus-within {
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px var(--primary-soft);
+      }
+      .sc-icon { color: var(--muted); flex-shrink: 0; }
+      .sc-input {
+        flex: 1;
+        border: none;
+        outline: none;
+        background: transparent;
+        font-family: inherit;
+        font-size: 0.9rem;
+        color: var(--text);
+      }
+      .sc-input::placeholder { color: #94A3B8; }
+      .sc-btn {
+        padding: 0.45rem 0.9rem;
+        background: var(--primary);
+        color: #fff;
+        border: none;
+        border-radius: 7px;
+        font-family: inherit;
+        font-size: 0.8rem;
+        font-weight: 600;
+        cursor: pointer;
+        flex-shrink: 0;
+        transition: background 0.18s;
+        white-space: nowrap;
+      }
+      .sc-btn:hover { background: var(--primary-hover); }
+      .sc-btn:disabled { background: #A8C3F8; cursor: not-allowed; }
+
+      /* Result rows inside card */
+      .sc-results { display: flex; flex-direction: column; gap: 0.5rem; }
+      .sc-result {
+        display: flex;
+        flex-direction: column;
+        gap: 0.2rem;
+        padding: 0.7rem 0.85rem;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        text-decoration: none;
+        color: inherit;
+        cursor: pointer;
+        transition: border-color 0.18s, box-shadow 0.18s;
+      }
+      .sc-result:hover {
+        border-color: #A8C3F8;
+        box-shadow: 0 2px 12px rgba(91,141,239,0.10);
+      }
+      .sc-result__subject {
+        font-size: 0.875rem;
+        font-weight: 600;
+        color: var(--text);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .sc-result__meta {
+        font-size: 0.75rem;
+        color: var(--muted);
+        display: flex;
+        gap: 0.5rem;
+        align-items: center;
+      }
+      .sc-result__why {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.3rem;
+        margin-top: 0.3rem;
+      }
+      .why-chip {
+        font-size: 0.68rem;
+        font-weight: 600;
+        color: var(--primary);
+        background: var(--primary-soft);
+        border-radius: 999px;
+        padding: 0.15rem 0.55rem;
+      }
+      .sc-status {
+        font-size: 0.78rem;
+        color: var(--muted);
+        text-align: center;
+        padding: 0.5rem 0;
+      }
+      .sc-error {
+        background: #FEF2F2;
+        border: 1px solid #FECACA;
+        color: #DC2626;
+        border-radius: 8px;
+        padding: 0.65rem 0.85rem;
+        font-size: 0.82rem;
+      }
+      .sc-score {
+        font-size: 0.68rem;
+        font-weight: 700;
+        color: var(--accent);
+        background: var(--accent-soft);
+        border-radius: 999px;
+        padding: 0.1rem 0.45rem;
+        margin-left: auto;
+        flex-shrink: 0;
+      }
+      .sc-empty {
+        text-align: center;
+        padding: 1.5rem 1rem;
+        color: var(--muted);
+        font-size: 0.85rem;
       }
 
-      footer a {
-        color: #818cf8;
+      /* Mock data (shown when no real results) */
+      .sc-mock { display: flex; flex-direction: column; gap: 0.5rem; }
+
+      /* ── Benefits ──────────────────────────────────── */
+      .benefits { padding: 5rem 1.5rem; }
+      .benefits__header { margin-bottom: 2.5rem; }
+      .cards-grid {
+        display: grid;
+        gap: 1.25rem;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      }
+      .benefit-card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-card);
+        padding: 1.5rem;
+        transition: box-shadow 0.2s, border-color 0.2s;
+      }
+      .benefit-card:hover {
+        box-shadow: var(--shadow-card-hover);
+        border-color: #C7D7F8;
+      }
+      .benefit-card__icon {
+        width: 40px; height: 40px;
+        border-radius: 10px;
+        background: var(--primary-soft);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-bottom: 1rem;
+        font-size: 1.25rem;
+      }
+      .benefit-card h3 {
+        font-size: 1rem;
+        font-weight: 700;
+        color: var(--text);
+        margin-bottom: 0.4rem;
+      }
+      .benefit-card p {
+        font-size: 0.9rem;
+        color: var(--text2);
+        line-height: 1.6;
+      }
+
+      /* ── How it works ──────────────────────────────── */
+      .how { padding: 5rem 1.5rem; background: var(--surface); }
+      .steps {
+        display: grid;
+        gap: 2rem;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        margin-top: 2.5rem;
+      }
+      .step {
+        position: relative;
+        padding: 1.5rem;
+        border-radius: var(--radius-card);
+        border: 1px solid var(--border);
+        background: var(--bg);
+      }
+      .step__num {
+        font-size: 0.7rem;
+        font-weight: 800;
+        letter-spacing: 0.1em;
+        color: var(--primary);
+        background: var(--primary-soft);
+        border-radius: 999px;
+        padding: 0.2rem 0.6rem;
+        display: inline-block;
+        margin-bottom: 0.75rem;
+      }
+      .step h3 {
+        font-size: 1.05rem;
+        font-weight: 700;
+        color: var(--text);
+        margin-bottom: 0.4rem;
+      }
+      .step p { font-size: 0.875rem; color: var(--text2); line-height: 1.6; }
+
+      /* ── Privacy ───────────────────────────────────── */
+      .privacy { padding: 5rem 1.5rem; background: var(--sidebar); }
+      .privacy__inner {
+        max-width: 720px;
+        margin: 0 auto;
+        text-align: center;
+      }
+      .privacy__points {
+        display: grid;
+        gap: 1rem;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        margin-top: 2rem;
+        text-align: left;
+      }
+      .privacy__point {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 1.15rem 1.25rem;
+        display: flex;
+        align-items: flex-start;
+        gap: 0.75rem;
+      }
+      .privacy__point-icon {
+        font-size: 1.1rem;
+        flex-shrink: 0;
+        margin-top: 0.05rem;
+      }
+      .privacy__point p { font-size: 0.875rem; color: var(--text2); line-height: 1.55; }
+      .privacy__point strong { color: var(--text); font-weight: 600; display: block; margin-bottom: 0.2rem; }
+
+      /* ── Setup accordion ───────────────────────────── */
+      .setup { padding: 5rem 1.5rem; }
+      .faq-list { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 2rem; max-width: 720px; }
+      .faq-item {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--surface);
+        overflow: hidden;
+        transition: border-color 0.2s, box-shadow 0.2s;
+      }
+      .faq-item[open] {
+        border-color: #A8C3F8;
+        box-shadow: 0 4px 16px rgba(91,141,239,0.08);
+      }
+      .faq-item summary {
+        cursor: pointer;
+        list-style: none;
+        padding: 1rem 1.25rem;
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: var(--text);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        user-select: none;
+      }
+      .faq-item summary::-webkit-details-marker { display: none; }
+      .faq-item summary::after {
+        content: "+";
+        color: var(--primary);
+        font-size: 1.2rem;
+        font-weight: 400;
+        flex-shrink: 0;
+      }
+      .faq-item[open] summary::after { content: "−"; }
+      .faq-body {
+        padding: 0 1.25rem 1rem;
+        font-size: 0.9rem;
+        color: var(--text2);
+        line-height: 1.65;
+        border-top: 1px solid var(--border);
+        padding-top: 0.85rem;
+      }
+      .faq-body code { color: var(--primary); font-size: 0.85em; }
+
+      /* ── Footer ────────────────────────────────────── */
+      footer {
+        border-top: 1px solid var(--border);
+        background: var(--surface);
+        padding: 2rem 1.5rem;
+      }
+      .footer__inner {
+        max-width: 1120px;
+        margin: 0 auto;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 1rem;
+      }
+      .footer__brand {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        font-weight: 700;
+        font-size: 0.9rem;
+        color: var(--text);
         text-decoration: none;
       }
+      .footer__brand svg { width: 18px; height: 18px; }
+      .footer__links {
+        display: flex;
+        gap: 1.5rem;
+        list-style: none;
+      }
+      .footer__links a {
+        font-size: 0.82rem;
+        color: var(--muted);
+        text-decoration: none;
+        transition: color 0.15s;
+      }
+      .footer__links a:hover { color: var(--text); }
+      .footer__copy { font-size: 0.78rem; color: var(--muted); }
 
-      footer a:hover {
-        text-decoration: underline;
+      /* ── Spinner ───────────────────────────────────── */
+      .spinner {
+        width: 13px; height: 13px;
+        border: 2px solid rgba(255,255,255,0.4);
+        border-top-color: #fff;
+        border-radius: 50%;
+        animation: spin 0.6s linear infinite;
+        display: inline-block;
+        vertical-align: middle;
       }
 
+      /* ── Animations ────────────────────────────────── */
       @keyframes fadeUp {
-        from {
-          opacity: 0;
-          transform: translateY(12px);
-        }
-        to {
-          opacity: 1;
-          transform: translateY(0);
-        }
+        from { opacity: 0; transform: translateY(10px); }
+        to   { opacity: 1; transform: translateY(0); }
       }
+      @keyframes spin { to { transform: rotate(360deg); } }
+
+      section { scroll-margin-top: 5rem; }
     </style>
   </head>
   <body>
-    <div class="noise-bg" aria-hidden="true"></div>
-    <div class="wrap">
-      <header>
-        <div class="mark">
-          <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-            <circle cx="14" cy="14" r="9" stroke="#818cf8" stroke-width="1.5" opacity="0.9" />
-            <line x1="21" y1="21" x2="28" y2="28" stroke="#818cf8" stroke-width="2" stroke-linecap="round" />
-            <circle cx="14" cy="14" r="3" fill="#6366f1" opacity="0.6" />
-          </svg>
-          <span>Mail Sherlock</span>
-        </div>
-        <span class="badge">Read-only · Local API</span>
-      </header>
 
-      <main>
-        <div class="hero">
-          <h1>Describe the clue.<br /><em>Find the message.</em></h1>
-          <p class="lead">
-            Type what you’re looking for in plain English—you remember the <em>idea</em>, not the exact subject or
-            who sent it. The assistant runs locally and only reads your emails to help you find them—no more endless Gmail scrolling.
-          </p>
-          <div class="cta-row">
-            <a class="btn btn-primary" href="/auth/login">Authorize Gmail</a>
-            <a class="btn btn-ghost" href="#before">What you need</a>
-          </div>
-        </div>
-
-        <section>
-          <h2>The method</h2>
-          <div class="cards">
-            <div class="card">
-              <h3>Observe</h3>
-              <p>Type what you recall—“landlord lease,” “interview Tuesday,” “Amazon keyboard”—even if those words never appear in the email.</p>
-            </div>
-            <div class="card">
-              <h3>Deduce</h3>
-              <p>Embeddings rank messages by <em>meaning</em>, so vague memories still surface the right thread.</p>
-            </div>
-            <div class="card">
-              <h3>Open</h3>
-              <p>Jump from a result straight into Gmail in the account you authorized—no guesswork about which profile opened.</p>
-            </div>
-          </div>
-        </section>
-
-        <section id="before" class="panel">
-          <h2>Before you investigate</h2>
-          <ul>
-            <li>
-              <strong>Run the API</strong> — Start the FastAPI server on port <strong>8000</strong> (see README). This page and OAuth live on the same host.
-            </li>
-            <li>
-              <strong>Authorize once</strong> — “Authorize Gmail” sends you through Google’s consent screen. We request <strong>read-only</strong> access so the tool can sync and index mail—not send mail on your behalf. If Google says the app is “being tested,” your Gmail must be added as a <strong>Test user</strong> in Google Cloud (OAuth consent screen) unless the app is published and verified—see the README.
-            </li>
-            <li>
-              <strong>Sync your index</strong> — After login, call <code style="color: #a5b4fc">POST /emails/sync</code> (e.g. from README) so the database has messages to search.
-            </li>
-            <li>
-              <strong>Use the extension</strong> — Load the built <code style="color: #a5b4fc">dist/</code> folder in Chrome, then search from the toolbar popup while the API stays running.
-            </li>
+    <!-- ── Nav ────────────────────────────────────────── -->
+    <header>
+      <nav class="nav" aria-label="Primary">
+        <div class="nav__inner">
+          <a class="nav__brand" href="#top">
+            <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <circle cx="14" cy="14" r="9" stroke="#5B8DEF" stroke-width="1.5"/>
+              <line x1="21" y1="21" x2="28" y2="28" stroke="#5B8DEF" stroke-width="2" stroke-linecap="round"/>
+              <circle cx="14" cy="14" r="3.5" fill="#5B8DEF" opacity="0.45"/>
+            </svg>
+            mail-sherlock
+          </a>
+          <ul class="nav__links">
+            <li><a href="#how">How it works</a></li>
+            <li><a href="#setup">Setup</a></li>
+            <li><a href="#faq">FAQ</a></li>
           </ul>
-        </section>
+          <div class="nav__actions">
+            <a class="btn btn-ghost" href="/auth/login" style="font-size:0.82rem;padding:0.4rem 0.75rem">Sign in</a>
+            <a class="btn btn-primary" href="/auth/login" style="font-size:0.82rem;padding:0.5rem 1rem">Authorize Gmail →</a>
+          </div>
+        </div>
+      </nav>
+    </header>
 
-        <footer>
-          <p>
-            OAuth tokens stay on this machine (<code style="color: #6b6b7a">token.json</code>). Full setup is in the
-            project README.
+    <!-- ── Hero ───────────────────────────────────────── -->
+    <section class="hero" id="top">
+      <div class="hero__inner">
+        <!-- Left: copy -->
+        <div class="hero__left">
+          <div class="hero__eyebrow">Read-only · Runs locally</div>
+          <h1>Find emails by <em>meaning</em>,<br/>not keywords.</h1>
+          <p class="hero__sub">
+            Describe what you remember — we'll surface the right email fast.
+            No more endless Gmail scrolling.
           </p>
-        </footer>
-      </main>
-    </div>
+          <div class="hero__cta">
+            <a class="btn btn-primary btn-lg" href="/auth/login">Authorize Gmail</a>
+            <a class="btn btn-secondary btn-lg" href="#how">See how it works</a>
+          </div>
+          <p class="hero__trust">
+            Privacy-first<span>·</span>Index only what you choose<span>·</span>Delete anytime
+          </p>
+        </div>
+
+        <!-- Right: live search card -->
+        <div class="hero__right">
+          <div class="search-card" id="searchCard">
+            <div class="sc-bar">
+              <svg class="sc-icon" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                   stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                   aria-hidden="true">
+                <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+              </svg>
+              <input
+                class="sc-input"
+                id="scInput"
+                type="text"
+                placeholder="e.g. tax refund from last year…"
+                autocomplete="off"
+                aria-label="Search your emails"
+              />
+              <button class="sc-btn" id="scBtn" onclick="scSearch()">
+                <span id="scBtnText">Search</span>
+              </button>
+            </div>
+
+            <!-- Live results area -->
+            <div id="scLive" style="display:none">
+              <p class="sc-status" id="scStatus"></p>
+              <div class="sc-results" id="scList"></div>
+            </div>
+
+            <!-- Mock data (default) -->
+            <div class="sc-mock" id="scMock">
+              <div class="sc-result">
+                <div style="display:flex;align-items:baseline;gap:0.5rem">
+                  <div class="sc-result__subject">Re: 2023 Tax Refund Status</div>
+                  <span class="sc-score">94%</span>
+                </div>
+                <div class="sc-result__meta">IRS Updates · Mar 12, 2024</div>
+                <div class="sc-result__why">
+                  <span class="why-chip">tax</span>
+                  <span class="why-chip">refund</span>
+                  <span class="why-chip">2023</span>
+                </div>
+              </div>
+              <div class="sc-result">
+                <div style="display:flex;align-items:baseline;gap:0.5rem">
+                  <div class="sc-result__subject">Your tax documents are ready</div>
+                  <span class="sc-score">88%</span>
+                </div>
+                <div class="sc-result__meta">TurboTax · Feb 28, 2024</div>
+                <div class="sc-result__why">
+                  <span class="why-chip">tax</span>
+                  <span class="why-chip">documents</span>
+                </div>
+              </div>
+              <div class="sc-result" style="opacity:0.6">
+                <div style="display:flex;align-items:baseline;gap:0.5rem">
+                  <div class="sc-result__subject">IRS: Payment Confirmation</div>
+                  <span class="sc-score">71%</span>
+                </div>
+                <div class="sc-result__meta">IRS · Apr 5, 2024</div>
+                <div class="sc-result__why">
+                  <span class="why-chip">IRS</span>
+                  <span class="why-chip">payment</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Benefits ───────────────────────────────────── -->
+    <section class="benefits" id="benefits">
+      <div class="container">
+        <div class="benefits__header">
+          <p class="section-label">Why mail-sherlock</p>
+          <h2 class="section-heading">Search the way your brain works.</h2>
+          <p class="section-sub">
+            You remember the idea — the context, the feeling, who it was from. Not the exact subject line.
+          </p>
+        </div>
+        <div class="cards-grid">
+          <div class="benefit-card">
+            <div class="benefit-card__icon">🔍</div>
+            <h3>Search by context</h3>
+            <p>Type "landlord lease renewal" or "interview follow-up Tuesday" — even if those words never appear in the email. Meaning-based search finds it.</p>
+          </div>
+          <div class="benefit-card">
+            <div class="benefit-card__icon">📊</div>
+            <h3>Ranked results</h3>
+            <p>Stop sifting through hundreds of near-misses. Results are sorted by semantic relevance so the right email surfaces near the top.</p>
+          </div>
+          <div class="benefit-card">
+            <div class="benefit-card__icon">✉️</div>
+            <h3>One-click open in Gmail</h3>
+            <p>Each result links directly into Gmail for the authorized account — no confusion about which profile to open.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── How it works ───────────────────────────────── -->
+    <section class="how" id="how">
+      <div class="container">
+        <p class="section-label">How it works</p>
+        <h2 class="section-heading">Three steps, then search.</h2>
+        <div class="steps">
+          <div class="step">
+            <span class="step__num">STEP 01</span>
+            <h3>Connect your inbox</h3>
+            <p>Click "Authorize Gmail" and complete Google's read-only consent screen. Tokens stay on your machine.</p>
+          </div>
+          <div class="step">
+            <span class="step__num">STEP 02</span>
+            <h3>Index your last N emails</h3>
+            <p>Run <code style="color:var(--primary);font-size:0.85em">POST /emails/sync</code> once. mail-sherlock fetches and embeds up to 500 messages locally.</p>
+          </div>
+          <div class="step">
+            <span class="step__num">STEP 03</span>
+            <h3>Ask in plain English</h3>
+            <p>Search right here on this page, or use the Chrome extension panel that appears inside Gmail.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Privacy ────────────────────────────────────── -->
+    <section class="privacy" id="privacy">
+      <div class="container">
+        <div class="privacy__inner">
+          <p class="section-label">Privacy-first</p>
+          <h2 class="section-heading">Your data stays on your machine.</h2>
+          <p class="section-sub">
+            mail-sherlock is a self-hosted tool. Nothing is sent to a cloud service run by this project.
+          </p>
+          <div class="privacy__points">
+            <div class="privacy__point">
+              <span class="privacy__point-icon">🔒</span>
+              <div>
+                <strong>We only index what you select</strong>
+                <p>Sync runs on demand. You control which messages are fetched.</p>
+              </div>
+            </div>
+            <div class="privacy__point">
+              <span class="privacy__point-icon">🚫</span>
+              <div>
+                <strong>No data sold or shared</strong>
+                <p>Embeddings and email content live in your local MongoDB instance only.</p>
+              </div>
+            </div>
+            <div class="privacy__point">
+              <span class="privacy__point-icon">🗑️</span>
+              <div>
+                <strong>Delete anytime</strong>
+                <p>Drop the database collection or revoke the OAuth token in Google Account settings.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Setup ──────────────────────────────────────── -->
+    <section class="setup" id="setup">
+      <div class="container">
+        <p class="section-label">Setup</p>
+        <h2 class="section-heading">Before you investigate.</h2>
+        <div class="faq-list">
+          <details class="faq-item">
+            <summary>1. Run the API server</summary>
+            <div class="faq-body">
+              Start the FastAPI server on port <strong>8000</strong> (see README). This landing page, OAuth flow, and
+              search all run on the same host — <code>http://localhost:8000</code>.
+            </div>
+          </details>
+          <details class="faq-item">
+            <summary>2. Authorize Gmail (read-only)</summary>
+            <div class="faq-body">
+              Click <strong>Authorize Gmail</strong> above. You'll go through Google's consent screen. The app requests
+              <strong>read-only</strong> access only — it cannot send email. If Google says the app is "being tested,"
+              add your Gmail address as a <strong>Test user</strong> in Google Cloud Console.
+            </div>
+          </details>
+          <details class="faq-item">
+            <summary>3. Sync your index</summary>
+            <div class="faq-body">
+              After signing in, call <code>POST /emails/sync</code> once (e.g. <code>curl -X POST http://localhost:8000/emails/sync</code>).
+              This fetches up to 500 messages, embeds them, and stores them in MongoDB.
+            </div>
+          </details>
+          <details class="faq-item">
+            <summary>4. (Optional) Install the Chrome extension</summary>
+            <div class="faq-body">
+              Load the built <code>dist/</code> folder as an unpacked extension in Chrome. A panel will appear on the
+              right edge of Gmail — drag it to reposition. Keep the API running while you browse.
+            </div>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── FAQ ────────────────────────────────────────── -->
+    <section class="section section--alt" id="faq">
+      <div class="container">
+        <p class="section-label">FAQ</p>
+        <h2 class="section-heading">Common questions.</h2>
+        <div class="faq-list">
+          <details class="faq-item">
+            <summary>Why use <code>localhost</code> for sign-in, not <code>127.0.0.1</code>?</summary>
+            <div class="faq-body">
+              Google's OAuth redirect URI must match exactly. The configured URI is
+              <code>http://localhost:8000/auth/callback</code>. If you open the app via <code>127.0.0.1</code> the
+              redirect won't match and sign-in will fail.
+            </div>
+          </details>
+          <details class="faq-item">
+            <summary>Does the extension send my mail to the cloud?</summary>
+            <div class="faq-body">
+              No. Search runs against your local API at <code>http://127.0.0.1:8000</code>. OAuth tokens are stored
+              in <code>token.json</code> on disk. mail-sherlock has no hosted backend.
+            </div>
+          </details>
+          <details class="faq-item">
+            <summary>The extension says it can't reach the backend.</summary>
+            <div class="faq-body">
+              Keep the FastAPI process running on port 8000. The extension always calls
+              <code>http://127.0.0.1:8000</code>. If you changed the port, update the extension's API URL and rebuild.
+            </div>
+          </details>
+          <details class="faq-item">
+            <summary>Do I need MongoDB?</summary>
+            <div class="faq-body">
+              Yes — emails and embeddings are stored there. Run it locally via Docker
+              (<code>docker run -p 27017:27017 mongo</code>) or point <code>MONGODB_URI</code> at MongoDB Atlas.
+              <code>GET /health</code> shows database status.
+            </div>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Footer ─────────────────────────────────────── -->
+    <footer>
+      <div class="footer__inner">
+        <a class="footer__brand" href="#top">
+          <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <circle cx="14" cy="14" r="9" stroke="#5B8DEF" stroke-width="1.5"/>
+            <line x1="21" y1="21" x2="28" y2="28" stroke="#5B8DEF" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="14" cy="14" r="3.5" fill="#5B8DEF" opacity="0.45"/>
+          </svg>
+          mail-sherlock
+        </a>
+        <ul class="footer__links">
+          <li><a href="#privacy">Privacy</a></li>
+          <li><a href="mailto:">Contact</a></li>
+          <li><a href="#faq">Disclaimer</a></li>
+        </ul>
+        <p class="footer__copy">OAuth tokens stay local · self-hosted</p>
+      </div>
+    </footer>
+
+    <!-- ── Live search logic ───────────────────────────── -->
+    <script>
+      const scInput   = document.getElementById('scInput');
+      const scBtn     = document.getElementById('scBtn');
+      const scBtnText = document.getElementById('scBtnText');
+      const scLive    = document.getElementById('scLive');
+      const scMock    = document.getElementById('scMock');
+      const scList    = document.getElementById('scList');
+      const scStatus  = document.getElementById('scStatus');
+
+      scInput.addEventListener('keydown', e => { if (e.key === 'Enter') scSearch(); });
+      scInput.addEventListener('input', () => {
+        // If they clear the input, restore mock
+        if (!scInput.value.trim()) {
+          scLive.style.display = 'none';
+          scMock.style.display = '';
+        }
+      });
+
+      function esc(s) {
+        return String(s)
+          .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      }
+
+      function fmtDate(raw) {
+        if (!raw) return '';
+        const d = new Date(raw);
+        return isNaN(d) ? esc(raw) : d.toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' });
+      }
+
+      function gmailLink(id) {
+        return id ? `https://mail.google.com/mail/#all/${id}` : '#';
+      }
+
+      async function scSearch() {
+        const q = scInput.value.trim();
+        if (!q) return;
+
+        scBtn.disabled = true;
+        scBtnText.innerHTML = '<span class="spinner"></span>';
+        scMock.style.display = 'none';
+        scLive.style.display = '';
+        scList.innerHTML = '';
+        scStatus.textContent = 'Searching…';
+
+        try {
+          const res = await fetch('/ask', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query: q, top_k: 5 }),
+          });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({ detail: res.statusText }));
+            throw new Error(err.detail || res.statusText);
+          }
+          const data = await res.json();
+          const results  = data.results || [];
+          const keywords = (data.intent && data.intent.keywords) || [];
+
+          if (results.length === 0) {
+            scStatus.textContent = '';
+            scList.innerHTML = '<div class="sc-empty">No results. Try a different description.</div>';
+            return;
+          }
+          scStatus.textContent = `${results.length} result${results.length===1?'':'s'}`;
+
+          scList.innerHTML = results.map(r => {
+            const kws = keywords.slice(0,4).map(k => `<span class="why-chip">${esc(k)}</span>`).join('');
+            const score = Math.round((r.score||0)*100);
+            const link = gmailLink(r.id || r.threadId || '');
+            return `
+              <a class="sc-result" href="${esc(link)}" target="_blank" rel="noopener">
+                <div style="display:flex;align-items:baseline;gap:0.5rem">
+                  <div class="sc-result__subject">${esc(r.subject||'(no subject)')}</div>
+                  <span class="sc-score">${score}%</span>
+                </div>
+                <div class="sc-result__meta">${esc(r.sender||'')}${r.sender&&r.date?' · ':''}${fmtDate(r.date)}</div>
+                ${kws ? `<div class="sc-result__why">${kws}</div>` : ''}
+              </a>`;
+          }).join('');
+        } catch(err) {
+          scStatus.textContent = '';
+          scList.innerHTML = `<div class="sc-error">${esc(err.message)}</div>`;
+        } finally {
+          scBtn.disabled = false;
+          scBtnText.textContent = 'Search';
+        }
+      }
+    </script>
   </body>
 </html>

@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Literal, Optional
 import html
 import json
 import numpy as np
@@ -23,6 +23,7 @@ from embeddings import (
     embeddings_ready,
     encode,
 )
+from agent_search import understand_query
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 CREDENTIALS_FILE = Path(__file__).parent / "credentials.json"
@@ -127,8 +128,27 @@ class QueryRequest(BaseModel):
     top_k: int = 5
 
 
-@app.post("/ask")
-async def ask(req: QueryRequest):
+class ChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class ChatRequest(BaseModel):
+    """Multi-turn chat: the server embeds all user lines together for context-aware search."""
+
+    messages: list[ChatMessage]
+    top_k: int = 5
+
+
+def _latest_user_message(messages: list[ChatMessage]) -> str:
+    """Return the most recent user message — this is the active search intent."""
+    for m in reversed(messages):
+        if m.role == "user" and m.content.strip():
+            return m.content.strip()
+    return ""
+
+
+async def _semantic_search(query_text: str, top_k: int = 5, history: list[dict] | None = None) -> dict:
     db = get_db()
     try:
         emails = await db["emails"].find({}, {"_id": 0}).to_list(length=1000)
@@ -139,33 +159,99 @@ async def ask(req: QueryRequest):
         ) from e
 
     gmail_auth_email = await _get_stored_gmail_address(db)
+    q = query_text.strip()
+    if not q:
+        return {"results": [], "gmailAuthEmail": gmail_auth_email}
 
     if not emails:
         return {"results": [], "gmailAuthEmail": gmail_auth_email}
 
     try:
-        query_vec = encode([req.query])[0]
+        # Use Gemini to understand the query intent (with conversation history for follow-ups)
+        intent = understand_query(q, history=history)
+        search_q = intent.get("search_query") or q
+        keywords = [kw.lower() for kw in intent.get("keywords") or []]
+        sender_hint = (intent.get("sender") or "").lower()
+        date_hint = intent.get("date_hint")
 
-        if embeddings_ready(emails):
+        candidates = emails
+
+        # Filter by sender if Gemini extracted one
+        if sender_hint:
+            filtered = [e for e in candidates if sender_hint in e.get("sender", "").lower()]
+            if filtered:
+                candidates = filtered
+
+        # Filter by date if Gemini extracted a time range
+        if date_hint:
+            from datetime import datetime, timedelta, timezone
+            from email.utils import parsedate_to_datetime
+            now = datetime.now(timezone.utc)
+            delta = {"last_week": timedelta(days=7), "last_month": timedelta(days=30), "last_year": timedelta(days=365)}.get(date_hint)
+            if delta:
+                cutoff = now - delta
+                def _parse_date(s):
+                    try:
+                        return parsedate_to_datetime(s)
+                    except Exception:
+                        return datetime.min.replace(tzinfo=timezone.utc)
+                filtered = [e for e in candidates if _parse_date(e.get("date", "")) >= cutoff]
+                if filtered:
+                    candidates = filtered
+
+        query_vec = encode([search_q])[0]
+
+        if embeddings_ready(candidates):
             email_vecs = np.asarray(
-                [e["embedding"] for e in emails], dtype=np.float32
+                [e["embedding"] for e in candidates], dtype=np.float32
             )
         else:
             # Legacy docs without ``embedding`` (re-run seed/sync to precompute).
-            bodies = [document_search_text(e) for e in emails]
+            bodies = [document_search_text(e) for e in candidates]
             email_vecs = encode(bodies)
 
         scores = cosine_similarity(query_vec, email_vecs)
-        top_indices = np.argsort(scores)[::-1][: req.top_k]
+
+        # Boost score for emails containing extracted keywords
+        if keywords:
+            for idx, email in enumerate(candidates):
+                text = (email.get("subject", "") + " " + email.get("body", "")).lower()
+                boost = sum(0.15 for kw in keywords if kw in text)
+                scores[idx] += boost
+
+        top_indices = np.argsort(scores)[::-1][:top_k]
 
         results = []
         for i in top_indices:
-            row = {k: v for k, v in emails[i].items() if k != "embedding"}
+            row = {k: v for k, v in candidates[i].items() if k != "embedding"}
             row["score"] = round(float(scores[i]), 4)
             results.append(row)
-        return {"results": results, "gmailAuthEmail": gmail_auth_email}
+        return {"results": results, "gmailAuthEmail": gmail_auth_email, "intent": intent}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Search failed: {e}") from e
+
+
+@app.post("/ask")
+async def ask(req: QueryRequest):
+    return await _semantic_search(req.query, req.top_k)
+
+
+@app.post("/chat")
+async def chat(req: ChatRequest):
+    query_text = _latest_user_message(req.messages)
+    if not query_text:
+        raise HTTPException(
+            status_code=400,
+            detail="Add at least one user message with text.",
+        )
+    # Pass prior turns as history so Gemini can resolve follow-ups correctly
+    history = [{"role": m.role, "content": m.content} for m in req.messages[:-1]]
+    out = await _semantic_search(query_text, req.top_k, history=history)
+    intent = out.get("intent", {})
+    topic = intent.get("topic") or query_text
+    n = len(out.get("results", []))
+    out["reply"] = f'Found {n} email{"s" if n != 1 else ""} related to: {topic}'
+    return out
 
 
 @app.get("/health")
