@@ -13,7 +13,6 @@ from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 import base64
-import email as email_lib
 from pymongo.errors import PyMongoError
 
 from db import connect_db, close_db, get_db
