@@ -105,6 +105,11 @@ app.add_middleware(
 _flows = {}
 
 
+@app.get("/ready")
+def ready():
+    return {"status": "ok"}
+
+
 @app.get("/", response_class=HTMLResponse)
 def landing_page():
     """Dark landing page: product intro + Gmail OAuth CTA."""
