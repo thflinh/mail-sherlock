@@ -87,7 +87,7 @@ async def _get_stored_gmail_address(db) -> Optional[str]:
 async def lifespan(app: FastAPI):
     await connect_db()
     import asyncio
-    await asyncio.get_event_loop().run_in_executor(None, warmup)
+    asyncio.get_event_loop().run_in_executor(None, warmup)  # fire-and-forget
     yield
     await close_db()
 
