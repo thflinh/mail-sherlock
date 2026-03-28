@@ -1,0 +1,14 @@
+Requirements
+
+1. Application must include:
+	•	Backend server (any stack)
+	•	Frontend (any stack)
+	•	Data must persist in a database (any stack)
+
+2. Engineering
+	•	Code pushed to GitHub
+	•	Clean project structure
+
+3. Deployment
+	•	Deploy to AWS EC2 or Vercel, or other cloud services
+	•	Implement the continuous integration

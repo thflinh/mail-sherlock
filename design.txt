@@ -1,0 +1,19 @@
+Landing page (for visitors who haven't signed up):
+
+Nav with sign in + get started CTA
+Hero with tagline, live demo search preview
+"How it works" — 3 steps
+Features grid — 6 cards
+Comparison table vs Gmail Gemini and Outlook Copilot
+Purple CTA band
+Footer
+
+Homepage / Dashboard (for logged-in users):
+
+Top nav with page links and avatar
+Sidebar with search filters, auto-labels, and account list with email counts
+Personalized greeting with sync status
+Big search bar with filter chips
+Stats row (emails indexed, accounts, unread, attachments)
+Results list with sender, account badge, tags, and match score
+Chip and search bar are interactive — clicking search fires a sendPrompt

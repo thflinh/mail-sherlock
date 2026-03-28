@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;background:#fff;color:#1a1a1a;line-height:1.6}
+a{text-decoration:none;color:inherit}
+
+/* NAV */
+nav{display:flex;align-items:center;justify-content:space-between;padding:18px 48px;border-bottom:0.5px solid #f0e8f5;background:#fff}
+.nav-logo{display:flex;align-items:center;gap:10px;font-weight:600;font-size:16px;color:#1a1a1a}
+.logo-mark{width:32px;height:32px;background:#F0C4DC;border-radius:10px;display:flex;align-items:center;justify-content:center}
+.nav-links{display:flex;gap:28px;font-size:14px;color:#666}
+.nav-links a:hover{color:#9B72CF}
+.nav-cta{display:flex;gap:10px;align-items:center}
+.btn-ghost{font-size:14px;color:#666;padding:8px 16px;border:0.5px solid #ddd;border-radius:20px;background:#fff;cursor:pointer}
+.btn-ghost:hover{background:#fdf6fb;border-color:#DCA8CC}
+.btn-fill{font-size:14px;color:#fff;padding:9px 20px;border:none;border-radius:20px;background:#9B72CF;cursor:pointer}
+.btn-fill:hover{background:#8560bf}
+
+/* HERO */
+.hero{text-align:center;padding:80px 48px 64px;background:#fff}
+.hero-badge{display:inline-flex;align-items:center;gap:6px;background:#FBEAF0;color:#993556;font-size:12px;font-weight:500;padding:5px 14px;border-radius:20px;margin-bottom:24px;border:0.5px solid #F4C0D1}
+.hero h1{font-size:48px;font-weight:700;line-height:1.15;max-width:640px;margin:0 auto 20px;color:#1a1a1a;letter-spacing:-0.5px}
+.hero h1 span{color:#9B72CF}
+.hero p{font-size:17px;color:#666;max-width:480px;margin:0 auto 36px;line-height:1.7}
+.hero-btns{display:flex;gap:12px;justify-content:center;margin-bottom:48px}
+.btn-hero-fill{font-size:15px;color:#fff;padding:13px 28px;border:none;border-radius:24px;background:#9B72CF;cursor:pointer;font-weight:500}
+.btn-hero-fill:hover{background:#8560bf}
+.btn-hero-ghost{font-size:15px;color:#9B72CF;padding:12px 28px;border:1.5px solid #DCA8CC;border-radius:24px;background:#fff;cursor:pointer;font-weight:500}
+.btn-hero-ghost:hover{background:#fdf6fb}
+
+/* DEMO CARD */
+.demo-wrap{max-width:640px;margin:0 auto;background:#fdf6fb;border:0.5px solid #e8d8f0;border-radius:16px;padding:20px;text-align:left}
+.demo-label{font-size:11px;font-weight:600;color:#9B72CF;letter-spacing:.08em;text-transform:uppercase;margin-bottom:12px}
+.demo-search{display:flex;align-items:center;gap:10px;background:#fff;border:1px solid #DCA8CC;border-radius:24px;padding:11px 18px;margin-bottom:14px}
+.demo-search span{font-size:14px;color:#aaa;flex:1}
+.demo-search-btn{background:#9B72CF;color:#fff;border:none;border-radius:16px;padding:5px 14px;font-size:12px;cursor:pointer}
+.demo-result{background:#fff;border:0.5px solid #edd8ef;border-radius:10px;padding:12px 14px;display:flex;gap:10px;align-items:flex-start;margin-bottom:8px}
+.demo-avatar{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;flex-shrink:0}
+.demo-body{flex:1;min-width:0}
+.demo-from{font-size:12px;font-weight:600;color:#1a1a1a;margin-bottom:2px}
+.demo-subj{font-size:12px;color:#444;margin-bottom:3px}
+.demo-snip{font-size:11px;color:#999;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.demo-score{font-size:11px;color:#9B72CF;font-weight:500;margin-left:auto;padding-left:8px;flex-shrink:0}
+
+/* HOW IT WORKS */
+.section{padding:72px 48px;max-width:960px;margin:0 auto}
+.section-tag{font-size:12px;font-weight:600;color:#9B72CF;letter-spacing:.08em;text-transform:uppercase;margin-bottom:12px}
+.section h2{font-size:32px;font-weight:700;color:#1a1a1a;margin-bottom:12px;letter-spacing:-0.3px}
+.section .sub{font-size:16px;color:#666;max-width:500px;margin-bottom:48px;line-height:1.7}
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
+.step{background:#fdf6fb;border:0.5px solid #eed8f0;border-radius:14px;padding:24px}
+.step-num{width:32px;height:32px;background:#9B72CF;color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;margin-bottom:16px}
+.step h3{font-size:15px;font-weight:600;color:#1a1a1a;margin-bottom:8px}
+.step p{font-size:13px;color:#777;line-height:1.6}
+
+/* FEATURES */
+.features-section{background:#fdf6fb;border-top:0.5px solid #f0e0f5;border-bottom:0.5px solid #f0e0f5;padding:72px 48px}
+.features-inner{max-width:960px;margin:0 auto}
+.features-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-top:48px}
+.feat{background:#fff;border:0.5px solid #eed8f0;border-radius:14px;padding:24px}
+.feat-icon{width:40px;height:40px;border-radius:10px;margin-bottom:16px;display:flex;align-items:center;justify-content:center}
+.feat h3{font-size:15px;font-weight:600;color:#1a1a1a;margin-bottom:8px}
+.feat p{font-size:13px;color:#777;line-height:1.6}
+
+/* COMPARE */
+.compare-section{padding:72px 48px;max-width:960px;margin:0 auto}
+.compare-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-top:40px}
+.compare-card{border-radius:14px;padding:24px;border:0.5px solid #e0e0e0}
+.compare-card.ours{border:2px solid #DCA8CC;background:#fdf6fb}
+.compare-header{font-size:13px;font-weight:700;margin-bottom:4px}
+.compare-sub{font-size:12px;color:#999;margin-bottom:20px}
+.compare-row{display:flex;align-items:center;gap:8px;font-size:13px;color:#555;margin-bottom:10px}
+.check{width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.check.y{background:#FBEAF0}
+.check.n{background:#f3f3f3}
+.best-badge{display:inline-block;background:#F0C4DC;color:#72243E;font-size:11px;font-weight:600;padding:3px 10px;border-radius:10px;margin-bottom:12px}
+
+/* CTA BAND */
+.cta-band{background:#9B72CF;padding:64px 48px;text-align:center}
+.cta-band h2{font-size:30px;font-weight:700;color:#fff;margin-bottom:12px}
+.cta-band p{font-size:15px;color:#e8d8f8;margin-bottom:32px}
+.btn-cta-white{font-size:15px;color:#9B72CF;padding:13px 32px;border:none;border-radius:24px;background:#fff;cursor:pointer;font-weight:600}
+.btn-cta-white:hover{background:#fdf6fb}
+
+/* FOOTER */
+footer{background:#1a1a1a;padding:32px 48px;display:flex;align-items:center;justify-content:space-between}
+.footer-logo{display:flex;align-items:center;gap:8px;color:#fff;font-weight:600;font-size:14px}
+.footer-logo-dot{width:24px;height:24px;background:#F0C4DC;border-radius:7px;display:flex;align-items:center;justify-content:center}
+.footer-links{display:flex;gap:20px;font-size:13px;color:#888}
+.footer-links a:hover{color:#DCA8CC}
+.footer-note{font-size:12px;color:#555}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-logo">
+    <div class="logo-mark">
+      <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><rect x="1" y="4" width="16" height="11" rx="2.5" fill="#CFA0C0"/><polyline points="1,4 9,10 17,4" stroke="white" stroke-width="1.5" fill="none"/></svg>
+    </div>
+    Smart Inbox
+  </div>
+  <div class="nav-links">
+    <a href="#">Features</a>
+    <a href="#">How it works</a>
+    <a href="#">Privacy</a>
+  </div>
+  <div class="nav-cta">
+    <button class="btn-ghost">Sign in</button>
+    <button class="btn-fill">Get started free</button>
+  </div>
+</nav>
+
+<!-- HERO -->
+<div class="hero">
+  <div class="hero-badge">
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1l1.2 2.6L10 4.5l-2 1.9.5 2.6L6 7.7l-2.5 1.3.5-2.6-2-1.9 2.8-.9z" fill="#993556"/></svg>
+    Free · Private · Local
+  </div>
+  <h1>Find any email by just <span>describing it</span></h1>
+  <p>Stop hunting for keywords. Type what you remember and Smart Inbox finds it — across all your Gmail accounts at once.</p>
+  <div class="hero-btns">
+    <button class="btn-hero-fill">Get the extension free</button>
+    <button class="btn-hero-ghost">See how it works</button>
+  </div>
+
+  <div class="demo-wrap">
+    <div class="demo-label">Try an example search</div>
+    <div class="demo-search">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="5.5" cy="5.5" r="4" stroke="#9B72CF" stroke-width="1.4"/><line x1="9" y1="9" x2="13" y2="13" stroke="#9B72CF" stroke-width="1.4" stroke-linecap="round"/></svg>
+      <span>"email where my landlord confirmed the rent price"</span>
+      <div class="demo-search-btn">Search</div>
+    </div>
+    <div class="demo-result">
+      <div class="demo-avatar" style="background:#F0C4DC;color:#72243E">JL</div>
+      <div class="demo-body">
+        <div class="demo-from">landlord@property.com <span style="color:#aaa;font-weight:400">· work@gmail.com</span></div>
+        <div class="demo-subj">Lease extension confirmation — June 2025</div>
+        <div class="demo-snip">Hi, we can extend the lease until June 2025. Monthly rent stays at $1,200...</div>
+      </div>
+      <div class="demo-score">98%</div>
+    </div>
+    <div class="demo-result">
+      <div class="demo-avatar" style="background:#EEF4FF;color:#0C447C">PM</div>
+      <div class="demo-body">
+        <div class="demo-from">property.mgmt@homes.com <span style="color:#aaa;font-weight:400">· personal@gmail.com</span></div>
+        <div class="demo-subj">Renewal offer — unit 4B</div>
+        <div class="demo-snip">Please review the attached renewal terms. Rent will increase by 3%...</div>
+      </div>
+      <div class="demo-score">84%</div>
+    </div>
+  </div>
+</div>
+
+<!-- HOW IT WORKS -->
+<div class="section">
+  <div class="section-tag">How it works</div>
+  <h2>Three steps to find any email</h2>
+  <p class="sub">No setup beyond connecting your accounts. No keywords, no folders, no filters.</p>
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <h3>Connect your accounts</h3>
+      <p>Sign in with Google once per account. Smart Inbox reads your emails securely via the Gmail API.</p>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <h3>We index your inbox</h3>
+      <p>Your emails are converted to AI embeddings locally on your machine. Nothing is sent to a server.</p>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <h3>Just describe it</h3>
+      <p>Type what you remember in plain English. The model finds the closest matches by meaning, not words.</p>
+    </div>
+  </div>
+</div>
+
+<!-- FEATURES -->
+<div class="features-section">
+  <div class="features-inner">
+    <div class="section-tag">Features</div>
+    <h2 style="font-size:32px;font-weight:700;color:#1a1a1a;letter-spacing:-0.3px;margin-bottom:8px">Everything your inbox was missing</h2>
+    <p style="font-size:16px;color:#666;line-height:1.7">Built for people with busy, multi-account inboxes who need results fast.</p>
+    <div class="features-grid">
+      <div class="feat">
+        <div class="feat-icon" style="background:#FBEAF0">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8" stroke="#993556" stroke-width="1.5"/><path d="M7 10l2 2 4-4" stroke="#993556" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <h3>Multi-account search</h3>
+        <p>Search Gmail, personal, and school accounts simultaneously with one query.</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon" style="background:#F5F0FF">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="3" y="4" width="14" height="12" rx="2" stroke="#534AB7" stroke-width="1.5"/><path d="M7 9h6M7 12h4" stroke="#534AB7" stroke-width="1.3" stroke-linecap="round"/></svg>
+        </div>
+        <h3>Semantic search</h3>
+        <p>Finds emails by meaning, not exact words. Works even when you misremember the phrasing.</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon" style="background:#E1F5EE">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 3v5l3 2" stroke="#0F6E56" stroke-width="1.5" stroke-linecap="round"/><circle cx="10" cy="10" r="7.5" stroke="#0F6E56" stroke-width="1.5"/></svg>
+        </div>
+        <h3>100% private</h3>
+        <p>Embeddings are built and stored locally. Your emails never leave your device.</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon" style="background:#FBEAF0">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M4 6h12M4 10h8M4 14h10" stroke="#993556" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </div>
+        <h3>Smart auto-tags</h3>
+        <p>Emails are automatically labeled — finance, work, housing, travel — for faster filtering.</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon" style="background:#F5F0FF">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="3" y="3" width="6" height="6" rx="1.5" stroke="#534AB7" stroke-width="1.5"/><rect x="11" y="3" width="6" height="6" rx="1.5" stroke="#534AB7" stroke-width="1.5"/><rect x="3" y="11" width="6" height="6" rx="1.5" stroke="#534AB7" stroke-width="1.5"/><rect x="11" y="11" width="6" height="6" rx="1.5" stroke="#534AB7" stroke-width="1.5"/></svg>
+        </div>
+        <h3>Chrome extension</h3>
+        <p>Works directly in your browser as a popup or sidebar. No separate app needed.</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon" style="background:#E1F5EE">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 4v3M10 13v3M4 10H7M13 10h3M6.3 6.3l2.1 2.1M11.6 11.6l2.1 2.1M6.3 13.7l2.1-2.1M11.6 8.4l2.1-2.1" stroke="#0F6E56" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </div>
+        <h3>Relevance scoring</h3>
+        <p>Every result shows a match percentage so you always know why it was surfaced.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- COMPARE -->
+<div class="compare-section">
+  <div class="section-tag">Comparison</div>
+  <h2 style="font-size:32px;font-weight:700;color:#1a1a1a;letter-spacing:-0.3px;margin-bottom:8px">Why not just use Gmail Gemini?</h2>
+  <p style="font-size:16px;color:#666;line-height:1.7;margin-bottom:0">Gemini and Copilot are great — but they're paid, siloed, and send your data to the cloud.</p>
+  <div class="compare-grid">
+    <div class="compare-card" style="background:#fafafa">
+      <div class="compare-header" style="color:#1a1a1a">Gmail Gemini</div>
+      <div class="compare-sub">Google AI Pro/Ultra</div>
+      <div class="compare-row"><div class="check y"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M2 5l2 2 4-4" stroke="#993556" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg></div>Natural language search</div>
+      <div class="compare-row"><div class="check n"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M3 3l4 4M7 3l-4 4" stroke="#bbb" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg></div><span style="color:#aaa">Multi-account search</span></div>
+      <div class="compare-row"><div class="check n"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M3 3l4 4M7 3l-4 4" stroke="#bbb" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg></div><span style="color:#aaa">Runs locally / private</span></div>
+      <div class="compare-row"><div class="check n"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M3 3l4 4M7 3l-4 4" stroke="#bbb" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg></div><span style="color:#aaa">Free to use</span></div>
+    </div>
+    <div class="compare-card ours">
+      <div class="best-badge">Smart Inbox</div>
+      <div class="compare-header" style="color:#72243E">Smart Inbox Assistant</div>
+      <div class="compare-sub">Free forever</div>
+      <div class="compare-row"><div class="check y"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M2 5l2 2 4-4" stroke="#993556" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg></div>Natural language search</div>
+      <div class="compare-row"><div class="check y"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M2 5l2 2 4-4" stroke="#993556" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg></div>Multi-account search</div>
+      <div class="compare-row"><div class="check y"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M2 5l2 2 4-4" stroke="#993556" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg></div>Runs locally / private</div>
+      <div class="compare-row"><div class="check y"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M2 5l2 2 4-4" stroke="#993556" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg></div>Free to use</div>
+    </div>
+    <div class="compare-card" style="background:#fafafa">
+      <div class="compare-header" style="color:#1a1a1a">Outlook Copilot</div>
+      <div class="compare-sub">Microsoft 365 paid add-on</div>
+      <div class="compare-row"><div class="check y"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M2 5l2 2 4-4" stroke="#993556" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg></div>Natural language search</div>
+      <div class="compare-row"><div class="check n"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M3 3l4 4M7 3l-4 4" stroke="#bbb" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg></div><span style="color:#aaa">Multi-account search</span></div>
+      <div class="compare-row"><div class="check n"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M3 3l4 4M7 3l-4 4" stroke="#bbb" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg></div><span style="color:#aaa">Runs locally / private</span></div>
+      <div class="compare-row"><div class="check n"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M3 3l4 4M7 3l-4 4" stroke="#bbb" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg></div><span style="color:#aaa">Free to use</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- CTA BAND -->
+<div class="cta-band">
+  <h2>Start finding emails in seconds</h2>
+  <p>Free to install. No credit card. Your emails stay on your machine.</p>
+  <button class="btn-cta-white">Get the Chrome extension</button>
+</div>
+
+<!-- FOOTER -->
+<footer>
+  <div class="footer-logo">
+    <div class="footer-logo-dot">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="1" y="3" width="12" height="8" rx="2" fill="#CFA0C0"/><polyline points="1,3 7,8 13,3" stroke="white" stroke-width="1.2" fill="none"/></svg>
+    </div>
+    Smart Inbox
+  </div>
+  <div class="footer-links">
+    <a href="#">Privacy</a>
+    <a href="#">GitHub</a>
+    <a href="#">Contact</a>
+  </div>
+  <div class="footer-note">CS4800 project · 2025</div>
+</footer>
+
+</body>
+</html>

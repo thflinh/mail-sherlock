@@ -1,0 +1,30 @@
+/* ── Design tokens ─────────────────────────────── */
+:root {
+  --bg:           #fdf6fb;
+  --surface:      #ffffff;
+  --primary:      #9B72CF;
+  --primary-hover:#8560bf;
+  --primary-soft: #F5EEFF;
+  --accent:       #DCA8CC;
+  --accent-soft:  #F0C4DC;
+  --text:         #1a1a1a;
+  --text2:        #444;
+  --muted:        #888;
+  --muted2:       #bbb;
+  --border:       #f0e8f5;
+  --border2:      #e0d0ec;
+  --radius:       12px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+body {
+  font-family: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+a { text-decoration: none; color: inherit; }
+button { font-family: inherit; cursor: pointer; }
