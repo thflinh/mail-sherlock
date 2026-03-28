@@ -63,7 +63,7 @@ export default function Dashboard({ navigate }: Props) {
       const res = await fetch("/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: [{ role: "user", content: text }] }),
+        body: JSON.stringify({ query: text }),
       });
       if (!res.ok) throw new Error(`Server error ${res.status}`);
       const data: SearchResponse = await res.json();
