@@ -163,7 +163,12 @@ export default function PanelApp() {
       );
       setTurns([
         ...historyForApi,
-        { role: "assistant", content: data.reply, results: data.results },
+        {
+          role: "assistant",
+          content: data.reply,
+          results: data.results,
+          isClarification: Boolean(data.clarification),
+        },
       ]);
     } catch (err) {
       setError(
@@ -244,21 +249,23 @@ export default function PanelApp() {
                         {turn.content}
                       </div>
                     ) : (
-                      <div key={`a-${i}`} className="chat-block chat-block--assistant">
+                      <div key={`a-${i}`} className={`chat-block chat-block--assistant${turn.isClarification ? " chat-block--clarification" : ""}`}>
                         <p className="assistant-label">{turn.content}</p>
-                        <div className="assistant-results">
-                          {turn.results.map((email) => (
-                            <ResultCard
-                              key={`${i}-${email.id}`}
-                              email={email}
-                              gmailAuthEmail={gmailAuthEmail}
-                            />
-                          ))}
-                          {!loading && turn.results.length === 0 && (
-                            <p className="empty">No messages matched.</p>
-                          )}
-                        </div>
-                        {i === turns.length - 1 && showFollowUpActions && (
+                        {!turn.isClarification && (
+                          <div className="assistant-results">
+                            {turn.results.map((email) => (
+                              <ResultCard
+                                key={`${i}-${email.id}`}
+                                email={email}
+                                gmailAuthEmail={gmailAuthEmail}
+                              />
+                            ))}
+                            {!loading && turn.results.length === 0 && (
+                              <p className="empty">No messages matched.</p>
+                            )}
+                          </div>
+                        )}
+                        {i === turns.length - 1 && showFollowUpActions && !turn.isClarification && (
                           <div className="follow-up-actions">
                             <button
                               type="button"

@@ -20,7 +20,8 @@ export interface EmailResult {
 }
 
 export interface SearchResponse {
-  reply: string;
+  reply?: string;
   results: EmailResult[];
-  gmailAuthEmail?: string;
+  gmailAuthEmail?: string | null;
+  intent?: Record<string, unknown>;
 }

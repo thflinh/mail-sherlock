@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
 from typing import Literal, Optional
@@ -24,7 +25,7 @@ from embeddings import (
     encode,
     warmup,
 )
-from agent_search import understand_query
+from agent_search import understand_query, rerank
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 CREDENTIALS_FILE = Path(__file__).parent / "credentials.json"  # local dev fallback
@@ -101,6 +102,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+_STATIC_DIR = Path(__file__).parent / "static"
+if (_STATIC_DIR / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=str(_STATIC_DIR / "assets")), name="assets")
+
 
 _flows = {}
 
@@ -108,6 +113,18 @@ _flows = {}
 @app.get("/ready")
 def ready():
     return {"status": "ok"}
+
+
+@app.get("/status")
+async def app_status():
+    """Returns auth state and email count so the frontend knows what setup step the user is on."""
+    db = get_db()
+    gmail_auth_email = await _get_stored_gmail_address(db)
+    try:
+        email_count = await db["emails"].count_documents({})
+    except PyMongoError:
+        email_count = 0
+    return {"gmailAuthEmail": gmail_auth_email, "emailCount": email_count}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -209,6 +226,16 @@ async def _semantic_search(query_text: str, top_k: int = 5, history: list[dict] 
     try:
         # Use Gemini to understand the query intent (with conversation history for follow-ups)
         intent = understand_query(q, history=history)
+
+        # If Gemini needs clarification, return the question without running a search
+        if intent.get("needs_clarification"):
+            return {
+                "results": [],
+                "gmailAuthEmail": gmail_auth_email,
+                "intent": intent,
+                "clarification": intent.get("clarifying_question"),
+            }
+
         search_q = intent.get("search_query") or q
         keywords = [kw.lower() for kw in intent.get("keywords") or []]
         sender_hint = (intent.get("sender") or "").lower()
@@ -259,13 +286,16 @@ async def _semantic_search(query_text: str, top_k: int = 5, history: list[dict] 
                 boost = sum(0.15 for kw in keywords if kw in text)
                 scores[idx] += boost
 
-        top_indices = np.argsort(scores)[::-1][:top_k]
-
-        results = []
+        # Fetch top-15 by cosine score, then re-rank with Gemini for true relevance
+        pre_k = min(15, len(candidates))
+        top_indices = np.argsort(scores)[::-1][:pre_k]
+        pre_results = []
         for i in top_indices:
             row = {k: v for k, v in candidates[i].items() if k != "embedding"}
             row["score"] = round(float(scores[i]), 4)
-            results.append(row)
+            pre_results.append(row)
+
+        results = rerank(q, pre_results, top_k=top_k)
         return {"results": results, "gmailAuthEmail": gmail_auth_email, "intent": intent}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Search failed: {e}") from e
@@ -287,10 +317,14 @@ async def chat(req: ChatRequest):
     # Pass prior turns as history so Gemini can resolve follow-ups correctly
     history = [{"role": m.role, "content": m.content} for m in req.messages[:-1]]
     out = await _semantic_search(query_text, req.top_k, history=history)
-    intent = out.get("intent", {})
-    topic = intent.get("topic") or query_text
-    n = len(out.get("results", []))
-    out["reply"] = f'Found {n} email{"s" if n != 1 else ""} related to: {topic}'
+
+    if out.get("clarification"):
+        out["reply"] = out["clarification"]
+    else:
+        intent = out.get("intent", {})
+        topic = intent.get("topic") or query_text
+        n = len(out.get("results", []))
+        out["reply"] = f'Found {n} email{"s" if n != 1 else ""} related to: {topic}'
     return out
 
 

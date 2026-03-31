@@ -174,7 +174,17 @@
   padding: 10px 16px;
   margin-bottom: 12px;
 }
-.lp-demo-search span { font-size: 14px; color: var(--muted2); flex: 1; }
+.lp-demo-input {
+  flex: 1;
+  font-size: 14px;
+  color: var(--text2);
+  background: transparent;
+  border: none;
+  outline: none;
+  font-family: inherit;
+  min-width: 0;
+}
+.lp-demo-input::placeholder { color: var(--muted2); }
 
 .lp-demo-search-btn {
   background: var(--primary);
@@ -184,7 +194,27 @@
   padding: 5px 14px;
   font-size: 12px;
   font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+  flex-shrink: 0;
 }
+.lp-demo-search-btn:disabled { opacity: 0.5; cursor: default; }
+
+.lp-demo-footer {
+  margin-top: 12px;
+  text-align: center;
+}
+
+.lp-demo-cta {
+  font-size: 13px;
+  color: var(--primary);
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-weight: 600;
+  padding: 0;
+}
+.lp-demo-cta:hover { text-decoration: underline; }
 
 .lp-demo-result {
   background: var(--surface);

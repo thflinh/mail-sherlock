@@ -1,3 +1,4 @@
+import { useState } from "react";
 import "./Landing.css";
 import type { Page } from "../App";
 import iconUrl from "../assets/icon.png";
@@ -22,7 +23,71 @@ function CheckIcon({ yes }: { yes: boolean }) {
   );
 }
 
+function initials(from: string): string {
+  const name = from.split("@")[0].replace(/[._-]/g, " ");
+  const parts = name.trim().split(/\s+/);
+  return parts.length >= 2
+    ? (parts[0][0] + parts[1][0]).toUpperCase()
+    : name.slice(0, 2).toUpperCase();
+}
+
+const AVATAR_PALETTE = [
+  { bg: "#F0C4DC", clr: "#72243E" },
+  { bg: "#EEF4FF", clr: "#0C447C" },
+  { bg: "#E1F5EE", clr: "#085041" },
+  { bg: "#FFF3E0", clr: "#7C4300" },
+];
+
+const DEFAULT_DEMO = [
+  { ini: "JL", bg: "#F0C4DC", clr: "#72243E", from: "landlord@property.com", subj: "Lease extension confirmation — June 2025", snip: "Hi, we can extend the lease until June 2025. Monthly rent stays at $1,200...", score: "98%" },
+  { ini: "PM", bg: "#EEF4FF", clr: "#0C447C", from: "property.mgmt@homes.com", subj: "Renewal offer — unit 4B", snip: "Please review the attached renewal terms. Rent will increase by 3%...", score: "84%" },
+];
+
+const DEFAULT_QUERY = "email where my landlord confirmed the rent price";
+
 export default function Landing({ navigate }: Props) {
+  const [demoQuery, setDemoQuery] = useState(DEFAULT_QUERY);
+  const [demoResults, setDemoResults] = useState(DEFAULT_DEMO);
+  const [demoLoading, setDemoLoading] = useState(false);
+
+  async function handleDemoSearch(e?: React.FormEvent) {
+    e?.preventDefault();
+    const text = demoQuery.trim();
+    if (!text || demoLoading) return;
+    setDemoLoading(true);
+    try {
+      const res = await fetch("/ask", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: text, top_k: 3 }),
+      });
+      if (!res.ok) throw new Error("search failed");
+      const data = await res.json();
+      const hits = data.results ?? [];
+      if (hits.length > 0) {
+        setDemoResults(
+          hits.map((r: any, i: number) => {
+            const sender: string = r.sender ?? r.from ?? "unknown@email.com";
+            const palette = AVATAR_PALETTE[i % AVATAR_PALETTE.length];
+            return {
+              ini: initials(sender),
+              bg: palette.bg,
+              clr: palette.clr,
+              from: sender,
+              subj: r.subject ?? "(no subject)",
+              snip: r.snippet ?? r.body?.slice(0, 120) ?? "",
+              score: r.score != null ? Math.round(r.score * 100) + "%" : "",
+            };
+          })
+        );
+      }
+    } catch {
+      // backend unavailable — keep showing default demo results
+    } finally {
+      setDemoLoading(false);
+    }
+  }
+
   return (
     <div className="lp">
       {/* ── Nav ── */}
@@ -73,31 +138,45 @@ export default function Landing({ navigate }: Props) {
 
         {/* Demo card */}
         <div className="lp-demo">
-          <div className="lp-demo-label">Try an example search</div>
-          <div className="lp-demo-search">
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-              <circle cx="5.5" cy="5.5" r="4" stroke="#9B72CF" strokeWidth="1.4" />
-              <line x1="9" y1="9" x2="13" y2="13" stroke="#9B72CF" strokeWidth="1.4" strokeLinecap="round" />
-            </svg>
-            <span>"email where my landlord confirmed the rent price"</span>
-            <div className="lp-demo-search-btn">Search</div>
-          </div>
-          {[
-            { ini: "JL", bg: "#F0C4DC", clr: "#72243E", from: "landlord@property.com", acct: "work@gmail.com", subj: "Lease extension confirmation — June 2025", snip: "Hi, we can extend the lease until June 2025. Monthly rent stays at $1,200...", score: "98%" },
-            { ini: "PM", bg: "#EEF4FF", clr: "#0C447C", from: "property.mgmt@homes.com", acct: "personal@gmail.com", subj: "Renewal offer — unit 4B", snip: "Please review the attached renewal terms. Rent will increase by 3%...", score: "84%" },
-          ].map((r) => (
-            <div key={r.ini} className="lp-demo-result">
+          <div className="lp-demo-label">Try a live search</div>
+          <form onSubmit={handleDemoSearch}>
+            <div className="lp-demo-search">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <circle cx="5.5" cy="5.5" r="4" stroke="#9B72CF" strokeWidth="1.4" />
+                <line x1="9" y1="9" x2="13" y2="13" stroke="#9B72CF" strokeWidth="1.4" strokeLinecap="round" />
+              </svg>
+              <input
+                type="text"
+                value={demoQuery}
+                onChange={(e) => setDemoQuery(e.target.value)}
+                placeholder="Describe an email…"
+                className="lp-demo-input"
+              />
+              <button
+                type="submit"
+                className="lp-demo-search-btn"
+                disabled={demoLoading || !demoQuery.trim()}
+              >
+                {demoLoading ? "…" : "Search"}
+              </button>
+            </div>
+          </form>
+          {demoResults.map((r, i) => (
+            <div key={i} className="lp-demo-result">
               <div className="lp-demo-av" style={{ background: r.bg, color: r.clr }}>{r.ini}</div>
               <div className="lp-demo-body">
-                <div className="lp-demo-from">
-                  {r.from} <span className="lp-demo-acct">· {r.acct}</span>
-                </div>
+                <div className="lp-demo-from">{r.from}</div>
                 <div className="lp-demo-subj">{r.subj}</div>
                 <div className="lp-demo-snip">{r.snip}</div>
               </div>
-              <div className="lp-demo-score">{r.score}</div>
+              {r.score && <div className="lp-demo-score">{r.score}</div>}
             </div>
           ))}
+          <div className="lp-demo-footer">
+            <button className="lp-demo-cta" onClick={() => navigate("dashboard")}>
+              Search your own inbox →
+            </button>
+          </div>
         </div>
       </section>
 
