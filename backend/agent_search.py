@@ -43,10 +43,17 @@ Schema:
   "keywords": ["<verbatim words that must appear: names, order numbers, jargon>"],
   "sender": "<sender name or email if mentioned, else null>",
   "date_hint": "<last_week | last_month | last_year | null>",
-  "topic": "<one sentence: what the user is currently looking for>"
+  "topic": "<one sentence: what the user is currently looking for>",
+  "search_focus": "<subject | body | sender | any>"
 }
 
-When needs_clarification=true, set clarifying_question to the question and leave search_query/keywords/sender/date_hint as empty/null — the search will not run until the user replies."""
+search_focus rules:
+- "subject" — query is about email topics/categories ("find emails about X", "emails titled Y")
+- "body"    — query asks what someone said/wrote ("what did Mike say about budget?", "did they confirm?")
+- "sender"  — query is primarily about who sent emails ("emails from HR")
+- "any"     — unclear, or the query spans multiple fields
+
+When needs_clarification=true, set clarifying_question to the question and leave search_query/keywords/sender/date_hint/search_focus as empty/null — the search will not run until the user replies."""
 
 # ── Re-ranking ─────────────────────────────────────────────────────────────────
 
@@ -103,6 +110,27 @@ def understand_query(user_query: str, history: list[dict] | None = None) -> dict
         return _fallback(user_query)
 
 
+def _extract_relevant_passage(body: str, query: str, window: int = 400) -> str:
+    """Find the 400-char window in body most relevant to query keywords.
+
+    Slides a window across the body in 100-char steps and returns the chunk
+    whose words overlap most with the query — so Gemini sees the relevant
+    passage even when it sits past char 400.
+    """
+    if not body:
+        return ""
+    query_words = set(query.lower().split())
+    best_score = -1
+    best_passage = body[:window]
+    for i in range(0, max(1, len(body) - window + 1), 100):
+        chunk = body[i: i + window]
+        score = sum(1 for w in query_words if w in chunk.lower())
+        if score > best_score:
+            best_score = score
+            best_passage = chunk
+    return best_passage
+
+
 def rerank(user_query: str, candidates: list[dict], top_k: int = 5) -> list[dict]:
     """Re-rank semantic search candidates by true relevance using Gemini.
 
@@ -120,12 +148,15 @@ def rerank(user_query: str, candidates: list[dict], top_k: int = 5) -> list[dict
     if not _client or len(candidates) <= 1:
         return candidates[:top_k]
 
-    # Build compact summaries so the prompt stays small
+    # Build summaries with more context so Gemini can distinguish similar emails
     summaries = []
     for i, e in enumerate(candidates):
-        body_snippet = (e.get("body") or "")[:200].replace("\n", " ")
+        body_snippet = _extract_relevant_passage(e.get("body") or "", user_query, window=400).replace("\n", " ")
+        date = e.get("date", "unknown date")
         summaries.append(
-            f'ID {i}: From: {e.get("sender","")} | Subject: {e.get("subject","")} | {body_snippet}'
+            f'ID {i}: [{date}] From: {e.get("sender","")} '
+            f'| Subject: {e.get("subject","")} '
+            f'| Body: {body_snippet}'
         )
 
     prompt = (
@@ -161,6 +192,44 @@ def rerank(user_query: str, candidates: list[dict], top_k: int = 5) -> list[dict
     except Exception as exc:
         logger.warning("Gemini rerank failed (%s) — using cosine order.", exc)
         return candidates[:top_k]
+
+
+def synthesize_answer(query: str, results: list[dict]) -> str:
+    """Reason across top results and return a direct 2-3 sentence answer with citations.
+
+    Falls back to empty string if Gemini is unavailable or fails.
+    """
+    if not _client or not results:
+        return ""
+
+    context_parts = []
+    for i, r in enumerate(results[:5]):
+        body_preview = _extract_relevant_passage(r.get("body") or "", query, window=600)
+        context_parts.append(
+            f"Email {i + 1} [{r.get('date', '')}] from {r.get('sender', '')}:\n"
+            f"Subject: {r.get('subject', '')}\n"
+            f"Body: {body_preview}"
+        )
+    context = "\n\n".join(context_parts)
+
+    prompt = (
+        f"User question: {query}\n\n"
+        f"Emails found:\n{context}\n\n"
+        f"Write 1-2 sentences summarizing what these emails contain in relation to the user's question. "
+        f"Reference specific emails by number (e.g. 'Email 2 mentions...'). "
+        f"Always present what was found — if the match isn't exact, describe what's closest."
+    )
+
+    try:
+        response = _client.models.generate_content(
+            model=_MODEL,
+            contents=prompt,
+            config={"temperature": 0, "max_output_tokens": 512},
+        )
+        return response.text.strip()
+    except Exception as exc:
+        logger.warning("synthesize_answer failed (%s)", exc)
+        return ""
 
 
 def _fallback(user_query: str) -> dict:

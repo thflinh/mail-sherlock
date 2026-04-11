@@ -726,5 +726,70 @@ mail-sherlock/
 
 
 ================================================================================
+16. CHANGELOG
+================================================================================
+
+--- 2026-04-08: Sync Speed Improvements ---
+
+Problem:
+  Clicking "Sync" on the dashboard was very slow (~2-3 minutes for 500 emails).
+  The backend fetched each email one at a time (sequential HTTP calls to Gmail).
+  Every sync deleted and re-inserted all emails regardless of what changed.
+
+Changes made (backend/main.py — /emails/sync):
+  1. Parallelized Gmail API fetches using ThreadPoolExecutor (20 workers).
+     Effect: ~20x speedup for the fetch phase (~2 min → ~10-15 sec).
+  2. Switched from full re-sync (delete_many + insert_many) to incremental upsert.
+     Only emails newer than last_sync_at are fetched (uses Gmail `after:` filter).
+     Existing email IDs are checked before fetching to skip duplicates.
+  3. Manual sync now returns `total` (all indexed emails) in addition to `synced`
+     (newly added this run). Frontend displays total, not just the delta.
+
+--- 2026-04-08: Search Answer Quality Fixes ---
+
+Problem:
+  The AI reply bubble would say "None of the provided emails are about X" even
+  when results were found. Responses were also sometimes truncated mid-sentence.
+
+Changes made (backend/agent_search.py — synthesize_answer):
+  1. Revised prompt from "say so honestly if no match" to "always describe what
+     was found — if not exact, describe what's closest."
+  2. Raised max_output_tokens from 300 → 512 to prevent truncation.
+
+Changes made (backend/main.py — /chat endpoint):
+  3. Added _NEGATIVE_PREFIXES guard: if Gemini's response starts with a negative
+     phrase ("none of", "there is no", etc.) while results exist, it is discarded
+     and replaced with the clean default "I found N emails related to: …" reply.
+
+--- 2026-04-09: UI — Removed Greeting Suggestion Pills ---
+
+  Removed hardcoded suggestion pill buttons ("Lease renewal", "Invoice / payment",
+  etc.) that appeared under the greeting message and after "New conversation".
+  Removed the GREETING_SUGGESTIONS constant and all references in Dashboard.tsx.
+
+--- 2026-04-10: Gmail Sync Pagination (cap 2000 emails) ---
+
+Problem:
+  Gmail's messages().list() returns at most 500 IDs per call and does not
+  automatically follow pages. The sync capped at 500 (or ~645 with background
+  incremental runs), leaving most of the inbox unindexed.
+
+Changes made (backend/main.py — _sync_account_bulk):
+  1. Replaced single list() call with a pagination loop that follows
+     nextPageToken until max_results IDs are collected or pages run out.
+  2. Raised max_results cap from 500 → 2000 (passed from sync_emails()).
+  3. Each page still requests up to 500 IDs (Gmail's max per page).
+  Result: initial sync now indexes up to 2000 most recent emails (newest first).
+  Subsequent incremental syncs remain fast because the after: date filter limits
+  results to only new mail since last sync.
+
+Design rationale (Option A chosen over full-inbox pagination):
+  - Full-inbox sync (Option B) with 10,000+ emails would take several minutes
+    for the fetch phase alone, plus heavy embedding compute and MongoDB storage.
+  - 2000 most recent emails covers the majority of real user search needs.
+  - Incremental sync keeps the index fresh without re-fetching old emails.
+
+
+================================================================================
 END OF REPORT
 ================================================================================

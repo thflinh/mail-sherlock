@@ -63,57 +63,89 @@ const LABELS = [
   { name: "School", dot: "#FAC775" },
 ];
 
-const GREETING_SUGGESTIONS: Suggestion[] = [
-  { label: "Lease renewal", query: "email about my lease renewal" },
-  { label: "Invoice / payment", query: "invoice or payment confirmation" },
-  { label: "School deadline", query: "professor deadline or assignment" },
-  { label: "Job offer", query: "job offer or interview" },
-];
 
 export default function Dashboard({ navigate }: Props) {
   const [query, setQuery] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [typing, setTyping] = useState(false);
+  // activeChip: account-scope selection ("All accounts" or a specific email)
   const [activeChip, setActiveChip] = useState("All accounts");
+  // activeFilters: stackable toggles ("Has attachment", "Unread only")
+  const [activeFilters, setActiveFilters] = useState<Set<string>>(new Set());
+  const [starredIds, setStarredIds] = useState<Set<number>>(new Set());
+  const [avatarOpen, setAvatarOpen] = useState(false);
   const chatRef = useRef<HTMLDivElement>(null);
   const msgIdRef = useRef(0);
 
   const [gmailEmail, setGmailEmail] = useState<string | null>(null);
+  /** Connected accounts (order = connection order; [0] is primary for greetings). */
+  const [accounts, setAccounts] = useState<string[]>([]);
   const [emailCount, setEmailCount] = useState(0);
   const [statusLoaded, setStatusLoaded] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [syncNeedsReauth, setSyncNeedsReauth] = useState(false);
   const [syncDone, setSyncDone] = useState(false);
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
 
+  function applyStatusPayload(d: {
+    accounts?: string[];
+    gmailAuthEmail?: string | null;
+    emailCount?: number;
+  }) {
+    const list: string[] = Array.isArray(d.accounts)
+      ? d.accounts
+      : d.gmailAuthEmail
+        ? [d.gmailAuthEmail]
+        : [];
+    setAccounts(list);
+    setGmailEmail(d.gmailAuthEmail ?? list[0] ?? null);
+    setEmailCount(d.emailCount ?? 0);
+  }
+
   useEffect(() => {
-    fetch("/status")
+    fetch("/status", { cache: "no-store" })
       .then((r) => r.json())
-      .then((d) => {
-        setGmailEmail(d.gmailAuthEmail ?? null);
-        setEmailCount(d.emailCount ?? 0);
-      })
+      .then((d) => applyStatusPayload(d))
       .catch(() => {})
       .finally(() => setStatusLoaded(true));
   }, []);
 
   useEffect(() => {
+    function onVisibility() {
+      if (document.visibilityState !== "visible") return;
+      fetch("/status", { cache: "no-store" })
+        .then((r) => r.json())
+        .then((d) => applyStatusPayload(d))
+        .catch(() => {});
+    }
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, []);
+
+  const primaryEmail = accounts[0] ?? gmailEmail;
+
+  useEffect(() => {
     if (!statusLoaded) return;
-    const name = gmailEmail ? gmailEmail.split("@")[0].split(".")[0] : null;
+    const name = primaryEmail ? primaryEmail.split("@")[0].split(".")[0] : null;
     setMessages([
       {
         id: ++msgIdRef.current,
         role: "ai",
         content: name
-          ? `Hi ${name}! I'm your Smart Inbox assistant. Describe any email you're looking for and I'll find it across your connected accounts.`
+          ? `Hi ${name}! I'm your Sherlock assistant. Describe any email you're looking for and I'll find it across your connected accounts.`
           : "Connect your Gmail account to start searching your emails by meaning — not just keywords.",
-        suggestions: gmailEmail ? GREETING_SUGGESTIONS : undefined,
+        suggestions: undefined,
         time: nowTime(),
       },
     ]);
-    // Intentionally once when /status has loaded — avoid wiping chat when gmailEmail updates later.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- gmailEmail is read on first paint after load
-  }, [statusLoaded]);
+  }, [statusLoaded, primaryEmail]);
+
+  useEffect(() => {
+    if (activeChip !== "All accounts" && !accounts.includes(activeChip)) {
+      setActiveChip("All accounts");
+    }
+  }, [accounts, activeChip]);
 
   function scrollToBottom() {
     setTimeout(() => {
@@ -121,19 +153,60 @@ export default function Dashboard({ navigate }: Props) {
     }, 50);
   }
 
+  function formatEmailDate(raw: string | undefined): string {
+    if (!raw) return "";
+    try {
+      const d = new Date(raw);
+      if (isNaN(d.getTime())) return raw;
+      return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    } catch {
+      return raw;
+    }
+  }
+
+  function toggleFilter(filter: string) {
+    setActiveFilters((prev) => {
+      const next = new Set(prev);
+      if (next.has(filter)) next.delete(filter);
+      else next.add(filter);
+      return next;
+    });
+  }
+
+  function toggleStar(id: number) {
+    setStarredIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
   async function handleSync() {
     setSyncing(true);
     setSyncError(null);
+    setSyncNeedsReauth(false);
     setSyncDone(false);
     try {
       const res = await fetch("/emails/sync", { method: "POST" });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
+        if (res.status === 401) {
+          setSyncNeedsReauth(true);
+          return;
+        }
         throw new Error(d.detail ?? `Server error ${res.status}`);
       }
       const d = await res.json();
-      setEmailCount(d.synced ?? 0);
+      setEmailCount(d.total ?? d.synced ?? 0);
+      if (Array.isArray(d.accounts) && d.accounts.length > 0) {
+        setAccounts(d.accounts);
+      } else if (d.perAccount && typeof d.perAccount === "object") {
+        const keys = Object.keys(d.perAccount as Record<string, unknown>);
+        if (keys.length > 0) setAccounts(keys);
+      }
       if (d.gmailAddress) setGmailEmail(d.gmailAddress);
+      else if (Array.isArray(d.accounts) && d.accounts[0]) setGmailEmail(d.accounts[0]);
       setSyncDone(true);
       setLastSyncedAt(new Date());
     } catch (err) {
@@ -167,18 +240,32 @@ export default function Dashboard({ navigate }: Props) {
       const res = await fetch("/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: historyForApi, top_k: 5 }),
+        body: JSON.stringify({
+          messages: historyForApi,
+          top_k: 5,
+          filters: {
+            has_attachment: activeFilters.has("Has attachment"),
+            unread_only: activeFilters.has("Unread only"),
+            ...(activeChip !== "All accounts" && accounts.includes(activeChip)
+              ? { account_email: activeChip }
+              : {}),
+          },
+        }),
       });
       if (!res.ok) throw new Error(`Server error ${res.status}`);
       const data: SearchResponse = await res.json();
-      if (data.gmailAuthEmail) setGmailEmail(data.gmailAuthEmail);
-
-      const accountEmail = data.gmailAuthEmail ?? gmailEmail ?? "";
+      if (Array.isArray(data.accounts) && data.accounts.length > 0) {
+        setAccounts(data.accounts);
+        setGmailEmail(data.gmailAuthEmail ?? data.accounts[0] ?? null);
+      } else if (data.gmailAuthEmail) {
+        setGmailEmail(data.gmailAuthEmail);
+      }
 
       const rawResults = data.results ?? [];
       const results: EmailResult[] = rawResults.map((r) => {
-        const row = r as EmailResult & { sender?: string };
+        const row = r as EmailResult & { sender?: string; accountEmail?: string };
         const sender = String(row.sender ?? row.from ?? "");
+        const acct = String(row.accountEmail ?? row.account ?? "").trim();
         return {
           id: String(row.id ?? ""),
           from: sender,
@@ -186,7 +273,7 @@ export default function Dashboard({ navigate }: Props) {
           snippet: String(row.snippet ?? ""),
           date: row.date != null ? String(row.date) : undefined,
           score: row.score != null ? Math.round(Number(row.score) * 100) : undefined,
-          account: accountEmail || undefined,
+          account: acct || undefined,
           tags: row.tags,
           initials: initials(sender),
           avatarBg: "#F0C4DC",
@@ -241,7 +328,7 @@ export default function Dashboard({ navigate }: Props) {
   }
 
   function clearChat() {
-    const name = gmailEmail ? gmailEmail.split("@")[0].split(".")[0] : null;
+    const name = primaryEmail ? primaryEmail.split("@")[0].split(".")[0] : null;
     setMessages([
       {
         id: ++msgIdRef.current,
@@ -249,29 +336,28 @@ export default function Dashboard({ navigate }: Props) {
         content: name
           ? `New conversation started. What email are you looking for, ${name}?`
           : "New conversation. Connect your Gmail to start searching.",
-        suggestions: gmailEmail ? GREETING_SUGGESTIONS : undefined,
+        suggestions: undefined,
         time: nowTime(),
       },
     ]);
   }
 
-  const setupStep = !statusLoaded ? 0 : !gmailEmail ? 1 : emailCount === 0 ? 2 : 3;
-  const userInitials = gmailEmail ? initials(gmailEmail) : "?";
-  const firstName = gmailEmail ? gmailEmail.split("@")[0].split(".")[0] : "there";
-  const accountCount = gmailEmail ? 1 : 0;
+  const userInitials = primaryEmail ? initials(primaryEmail) : "?";
+  const firstName = primaryEmail ? primaryEmail.split("@")[0].split(".")[0] : "there";
+  const accountCount = accounts.length > 0 ? accounts.length : primaryEmail ? 1 : 0;
 
-  const filterChips: string[] = [
-    "All accounts",
-    ...(gmailEmail ? [gmailEmail] : []),
-    "Has attachment",
-    "Unread only",
-  ];
+  // Account chips are mutually exclusive; Has attachment / Unread only stack on top
+  const accountChips: string[] = ["All accounts", ...accounts];
+  const OPTION_CHIPS = ["Has attachment", "Unread only"];
 
   const topbarLine = (() => {
-    if (!gmailEmail) return "Connect Gmail to get started";
+    if (!primaryEmail) return "Connect Gmail to get started";
     if (emailCount === 0 && !syncDone)
-      return `${gmailEmail} · Sync your inbox to index emails`;
-    const parts = [`${emailCount.toLocaleString()} emails indexed`, `${accountCount} account`];
+      return `${accounts.length > 1 ? `${accounts.length} accounts` : primaryEmail} · Sync your inbox to index emails`;
+    const parts = [
+      `${emailCount.toLocaleString()} emails indexed`,
+      `${accountCount} account${accountCount === 1 ? "" : "s"}`,
+    ];
     if (lastSyncedAt) parts.push(`Last synced ${formatRelativeTime(lastSyncedAt)}`);
     else if (syncDone) parts.push("Last synced just now");
     return parts.join(" · ");
@@ -281,9 +367,9 @@ export default function Dashboard({ navigate }: Props) {
     return text.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
   }
 
-  const canSearch = statusLoaded && !!gmailEmail;
+  const canSearch = statusLoaded && !!primaryEmail;
   const sendDisabled = !query.trim() || typing || !canSearch;
-  const connected = !!gmailEmail;
+  const connected = accounts.length > 0 || !!primaryEmail;
 
   return (
     <div className="db">
@@ -291,7 +377,7 @@ export default function Dashboard({ navigate }: Props) {
         <div className="db-nav-left">
           <div className="db-logo">
             <img src={iconUrl} alt="" width={30} height={30} style={{ objectFit: "contain" }} />
-            mail-sherlock
+            Mail Sherlock
           </div>
           <div className="db-nav-links">
             <span className="db-nav-link active">Dashboard</span>
@@ -301,23 +387,126 @@ export default function Dashboard({ navigate }: Props) {
           </div>
         </div>
         <div className="db-nav-right">
-          {setupStep < 3 && (
+          {connected ? (
+            <a
+              href="/auth/login"
+              className="db-btn-add-mailbox"
+              title="Sign in with another Google account in the browser"
+            >
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden>
+                <line x1="6" y1="1" x2="6" y2="11" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                <line x1="1" y1="6" x2="11" y2="6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+              </svg>
+              Add mailbox
+            </a>
+          ) : (
             <a href="/auth/login" className="db-btn-connect">
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden>
                 <line x1="6" y1="1" x2="6" y2="11" stroke="white" strokeWidth="1.6" strokeLinecap="round" />
                 <line x1="1" y1="6" x2="11" y2="6" stroke="white" strokeWidth="1.6" strokeLinecap="round" />
               </svg>
-              Connect account
+              Connect Gmail
             </a>
           )}
-          <button type="button" className="db-avatar" onClick={() => navigate("landing")}>
-            {userInitials}
-          </button>
+          <div className="db-avatar-wrap">
+            <button
+              type="button"
+              className="db-avatar"
+              onClick={() => setAvatarOpen((o) => !o)}
+              aria-label="Account menu"
+            >
+              {userInitials}
+            </button>
+            {avatarOpen && (
+              <div className="db-avatar-menu" onMouseLeave={() => setAvatarOpen(false)}>
+                <div className="db-avatar-menu-h">Connected mailboxes</div>
+                {accounts.length === 0 ? (
+                  <div className="db-avatar-email db-avatar-email-empty">No Gmail linked yet</div>
+                ) : (
+                  accounts.map((a) => (
+                    <div key={a} className="db-avatar-email" title={a}>
+                      {a}
+                    </div>
+                  ))
+                )}
+                <div className="db-avatar-divider" />
+                <a href="/auth/login" className="db-avatar-item" onClick={() => setAvatarOpen(false)}>
+                  Add or manage Gmail
+                </a>
+                <button
+                  type="button"
+                  className="db-avatar-item db-avatar-signout"
+                  onClick={() => { setAvatarOpen(false); navigate("landing"); }}
+                >
+                  Sign out
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </nav>
 
       <div className="db-layout">
         <aside className="db-sidebar">
+          <div className="db-sidebar-section db-sidebar-accounts">
+            <div className="db-sidebar-label">Accounts</div>
+            {accounts.length > 0 ? (
+              <>
+                {accounts.map((acc) => (
+                  <div key={acc} className="db-acc-item" title={acc}>
+                    <div className="db-acc-dot" style={{ background: "#34A853" }} />
+                    <div className="db-acc-name">{acc}</div>
+                    {accounts.length === 1 && emailCount > 0 && (
+                      <div className="db-acc-count">{emailCount.toLocaleString()}</div>
+                    )}
+                  </div>
+                ))}
+                <button type="button" className="db-sync-btn" onClick={handleSync} disabled={syncing}>
+                  {syncing ? (
+                    <>
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="db-spin">
+                        <circle cx="6" cy="6" r="4.5" stroke="#9B72CF" strokeWidth="1.5" strokeDasharray="14 8" />
+                      </svg>
+                      Syncing…
+                    </>
+                  ) : (
+                    <>
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden>
+                        <path d="M10 6A4 4 0 1 1 6 2" stroke="#9B72CF" strokeWidth="1.5" strokeLinecap="round" />
+                        <path d="M6 2l2-2M6 2l2 2" stroke="#9B72CF" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                      {syncDone ? "Re-sync all" : "Sync inboxes"}
+                    </>
+                  )}
+                </button>
+                {syncDone && (
+                  <div className="db-sync-ok">
+                    {emailCount.toLocaleString()} indexed across {accountCount}{" "}
+                    {accountCount === 1 ? "account" : "accounts"}
+                  </div>
+                )}
+                {syncNeedsReauth && (
+                  <div className="db-sync-reauth">
+                    Session expired —{" "}
+                    <a href="/auth/login" className="db-sync-reauth-link">
+                      reconnect Gmail
+                    </a>
+                  </div>
+                )}
+                {syncError && <div className="db-sync-err">{syncError}</div>}
+              </>
+            ) : (
+              <div className="db-acc-empty">Connect a Gmail account to index your mail.</div>
+            )}
+            <a href="/auth/login" className="db-add-acc">
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden>
+                <line x1="6" y1="1" x2="6" y2="11" stroke="#9B72CF" strokeWidth="1.6" strokeLinecap="round" />
+                <line x1="1" y1="6" x2="11" y2="6" stroke="#9B72CF" strokeWidth="1.6" strokeLinecap="round" />
+              </svg>
+              {accounts.length > 0 ? "Add another mailbox" : "Add Gmail account"}
+            </a>
+          </div>
+
           <div className="db-sidebar-section">
             <div className="db-sidebar-label">Menu</div>
             {[
@@ -378,47 +567,6 @@ export default function Dashboard({ navigate }: Props) {
             ))}
           </div>
 
-          <div className="db-sidebar-section">
-            <div className="db-sidebar-label">Accounts</div>
-            {gmailEmail ? (
-              <>
-                <div className="db-acc-item">
-                  <div className="db-acc-dot" style={{ background: "#34A853" }} />
-                  <div className="db-acc-name">{gmailEmail}</div>
-                  {emailCount > 0 && <div className="db-acc-count">{emailCount.toLocaleString()}</div>}
-                </div>
-                <button type="button" className="db-sync-btn" onClick={handleSync} disabled={syncing}>
-                  {syncing ? (
-                    <>
-                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="db-spin">
-                        <circle cx="6" cy="6" r="4.5" stroke="#9B72CF" strokeWidth="1.5" strokeDasharray="14 8" />
-                      </svg>
-                      Syncing…
-                    </>
-                  ) : (
-                    <>
-                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                        <path d="M10 6A4 4 0 1 1 6 2" stroke="#9B72CF" strokeWidth="1.5" strokeLinecap="round" />
-                        <path d="M6 2l2-2M6 2l2 2" stroke="#9B72CF" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-                      </svg>
-                      {syncDone ? "Re-sync emails" : "Sync emails"}
-                    </>
-                  )}
-                </button>
-                {syncDone && <div className="db-sync-ok">{emailCount.toLocaleString()} emails indexed</div>}
-                {syncError && <div className="db-sync-err">{syncError}</div>}
-              </>
-            ) : (
-              <a href="/auth/login" className="db-add-acc">
-                <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                  <line x1="6" y1="1" x2="6" y2="11" stroke="#9B72CF" strokeWidth="1.6" strokeLinecap="round" />
-                  <line x1="1" y1="6" x2="11" y2="6" stroke="#9B72CF" strokeWidth="1.6" strokeLinecap="round" />
-                </svg>
-                Add account
-              </a>
-            )}
-          </div>
-
           {connected && (
             <div className="db-sidebar-section">
               <div className="db-sidebar-label">Stats</div>
@@ -458,12 +606,26 @@ export default function Dashboard({ navigate }: Props) {
               </button>
             </div>
             <div className="db-chips">
-              {filterChips.map((chip) => (
+              {accountChips.map((chip) => (
                 <div
                   key={chip}
-                  className={`db-chip${activeChip === chip ? " active" : ""}`}
+                  className={`db-chip${activeChip === chip ? " active" : ""}${chip.includes("@") ? " db-chip-mail" : ""}`}
                   onClick={() => setActiveChip(chip)}
                   onKeyDown={(e) => e.key === "Enter" && setActiveChip(chip)}
+                  role="button"
+                  tabIndex={0}
+                  title={chip.includes("@") ? chip : undefined}
+                >
+                  <span className="db-chip-label">{chip}</span>
+                </div>
+              ))}
+              <div className="db-chip-divider" />
+              {OPTION_CHIPS.map((chip) => (
+                <div
+                  key={chip}
+                  className={`db-chip${activeFilters.has(chip) ? " active" : ""}`}
+                  onClick={() => toggleFilter(chip)}
+                  onKeyDown={(e) => e.key === "Enter" && toggleFilter(chip)}
                   role="button"
                   tabIndex={0}
                 >
@@ -492,7 +654,7 @@ export default function Dashboard({ navigate }: Props) {
                         const score = r.score ?? 0;
                         const tags = r.tags ?? [];
                         const gmailLink = r.id ? `https://mail.google.com/mail/u/0/#inbox/${r.id}` : null;
-                        const acct = r.account ?? gmailEmail ?? "";
+                        const acct = r.account ?? "";
                         return (
                           <a
                             key={r.id}
@@ -504,7 +666,7 @@ export default function Dashboard({ navigate }: Props) {
                           >
                             <div className="db-rc-top">
                               <span className="db-rc-from">{r.from}</span>
-                              <span className="db-rc-date">{r.date ?? ""}</span>
+                              <span className="db-rc-date">{formatEmailDate(r.date)}</span>
                             </div>
                             <div className="db-rc-subj">{r.subject}</div>
                             <div className="db-rc-snip">{r.snippet}</div>
@@ -521,6 +683,9 @@ export default function Dashboard({ navigate }: Props) {
                                 </span>
                               )}
                               {score > 0 && <span className="db-rc-score">{score}% match</span>}
+                              {gmailLink && (
+                                <span className="db-rc-gmail-link">Open in Gmail →</span>
+                              )}
                             </div>
                           </a>
                         );
@@ -537,7 +702,24 @@ export default function Dashboard({ navigate }: Props) {
                       ))}
                     </div>
                   )}
-                  <div className="db-bubble-ts">{msg.time}</div>
+                  <div className="db-bubble-foot">
+                    <span className="db-bubble-ts">{msg.time}</span>
+                    {msg.role === "ai" && (
+                      <button
+                        type="button"
+                        className={`db-star-btn${starredIds.has(msg.id) ? " starred" : ""}`}
+                        onClick={() => toggleStar(msg.id)}
+                        aria-label={starredIds.has(msg.id) ? "Remove bookmark" : "Bookmark this response"}
+                        title={starredIds.has(msg.id) ? "Remove bookmark" : "Bookmark"}
+                      >
+                        <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                          <path d="M8 2l1.5 3.5L13 6l-2.5 2.5.5 3.5L8 10.5 5 12l.5-3.5L3 6l3.5-.5z"
+                            stroke="currentColor" strokeWidth="1.3"
+                            fill={starredIds.has(msg.id) ? "currentColor" : "none"} />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
                 </div>
                 {msg.role === "user" && <div className="db-msg-avatar user-av">{userInitials}</div>}
               </div>
@@ -575,7 +757,7 @@ export default function Dashboard({ navigate }: Props) {
                 placeholder={
                   canSearch
                     ? "Ask me to find an email, or ask a follow-up…"
-                    : "Connect Gmail in the header to search…"
+                    : "Connect Gmail (top right) to search your mail…"
                 }
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
@@ -592,7 +774,9 @@ export default function Dashboard({ navigate }: Props) {
             </div>
             <div className="db-input-hint">
               {connected
-                ? `mail-sherlock searches ${gmailEmail ? `as ${gmailEmail}` : "your inbox"} · results ranked by semantic similarity`
+                ? activeChip === "All accounts"
+                  ? `mail-sherlock searches across ${accountCount} account${accountCount === 1 ? "" : "s"} · results ranked by semantic similarity`
+                  : `mail-sherlock searches as ${activeChip} · results ranked by semantic similarity`
                 : "Connect an account to search across your indexed mail"}
             </div>
           </div>

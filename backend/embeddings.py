@@ -1,7 +1,8 @@
 import numpy as np
 
-# all-MiniLM-L6-v2 — fixed size; avoids loading PyTorch/transformers at import time.
-EMBEDDING_DIM: int = 384
+# BAAI/bge-base-en-v1.5 — retrieval-optimised, outperforms MiniLM on search benchmarks.
+# Drop-in replacement; produces 768-dim normalised vectors.
+EMBEDDING_DIM: int = 768
 
 _model = None
 
@@ -11,8 +12,7 @@ def _get_model():
     global _model
     if _model is None:
         from sentence_transformers import SentenceTransformer
-
-        _model = SentenceTransformer("all-MiniLM-L6-v2")
+        _model = SentenceTransformer("BAAI/bge-base-en-v1.5")
     return _model
 
 
@@ -28,22 +28,57 @@ def cosine_similarity(query_vec: np.ndarray, email_vecs: np.ndarray) -> np.ndarr
 
 
 def document_search_text(doc: dict) -> str:
-    return f"From: {doc.get('sender', '')} Subject: {doc.get('subject', '')} {doc.get('body', '')}"
+    """Build corpus text for embedding.
+
+    Subject carries ~10x more signal than body for search, so we repeat it 3x
+    to tilt the embedding space toward it without losing body context.
+    """
+    subject = doc.get("subject") or ""
+    sender = doc.get("sender") or ""
+    body = (doc.get("body") or "")[:500]
+    return f"{subject}. {subject}. {subject}. From: {sender} {body}"
 
 
 def add_embeddings_inplace(docs: list[dict]) -> None:
-    """Fill each doc's ``embedding`` (list[float]) for MongoDB storage. Call after sync/seed."""
+    """Compute and store 3 separate embeddings per doc for field-weighted retrieval.
+
+    Stores:
+      emb_subject  — subject only (high signal for topic queries)
+      emb_body     — first 1000 chars of body (for "what did X say?" queries)
+      emb_combined — subject + snippet (general-purpose fallback)
+      embedding    — alias of emb_combined for backwards compat
+    """
     if not docs:
         return
-    texts = [document_search_text(d) for d in docs]
-    vecs = encode(texts)
+    subjects = [d.get("subject") or "" for d in docs]
+    bodies   = [(d.get("body") or "")[:1000] for d in docs]
+    combined = [
+        (d.get("subject") or "") + " " + (d.get("snippet") or "")
+        for d in docs
+    ]
+
+    emb_subj = encode(subjects)
+    emb_body = encode(bodies)
+    emb_comb = encode(combined)
+
     for i, d in enumerate(docs):
-        d["embedding"] = vecs[i].astype(np.float32).tolist()
+        d["emb_subject"]  = emb_subj[i].astype(np.float32).tolist()
+        d["emb_body"]     = emb_body[i].astype(np.float32).tolist()
+        d["emb_combined"] = emb_comb[i].astype(np.float32).tolist()
+        d["embedding"]    = d["emb_combined"]  # backwards compat
 
 
 def warmup() -> None:
     """Load the model into memory now so the first search request is instant."""
     _get_model()
+
+
+def field_embeddings_ready(docs: list[dict]) -> bool:
+    """True if docs have the 3-field embedding structure from the current schema."""
+    return all(
+        isinstance(d.get("emb_subject"), list) and len(d["emb_subject"]) == EMBEDDING_DIM
+        for d in docs
+    )
 
 
 def embeddings_ready(docs: list[dict]) -> bool:

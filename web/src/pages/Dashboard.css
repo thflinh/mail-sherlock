@@ -28,7 +28,7 @@
   align-items: center;
   gap: 9px;
   font-weight: 600;
-  font-size: 15px;
+  font-size: 28px;
   color: var(--text);
   white-space: nowrap;
 }
@@ -72,6 +72,25 @@
 }
 .db-btn-connect:hover { background: var(--primary-hover); }
 
+.db-btn-add-mailbox {
+  font-size: 13px;
+  color: var(--primary);
+  background: var(--surface);
+  border: 0.5px solid var(--accent);
+  padding: 7px 14px;
+  border-radius: 18px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  transition: background 0.15s, border-color 0.15s;
+  text-decoration: none;
+}
+.db-btn-add-mailbox:hover {
+  background: var(--primary-soft);
+  border-color: var(--primary);
+}
+
 .db-avatar {
   width: 32px;
   height: 32px;
@@ -92,7 +111,7 @@
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 210px 1fr;
+  grid-template-columns: minmax(232px, 260px) 1fr;
 }
 
 /* ── Sidebar ───────────────────────────────────── */
@@ -105,6 +124,11 @@
 }
 
 .db-sidebar-section { margin-bottom: 24px; }
+.db-sidebar-accounts {
+  padding-bottom: 4px;
+  border-bottom: 0.5px solid var(--border);
+  margin-bottom: 20px;
+}
 
 .db-sidebar-label {
   font-size: 10px;
@@ -142,20 +166,32 @@
 
 .db-acc-item {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
-  padding: 6px 10px;
+  padding: 7px 10px;
   border-radius: 8px;
-  font-size: 12px;
-  color: var(--muted);
-  cursor: pointer;
-  margin-bottom: 2px;
+  font-size: 11.5px;
+  color: var(--text);
+  cursor: default;
+  margin-bottom: 4px;
   transition: background 0.13s;
+  line-height: 1.35;
 }
 .db-acc-item:hover { background: var(--bg); }
 
-.db-acc-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-.db-acc-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-acc-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 4px;
+}
+.db-acc-name {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 .db-acc-count { font-size: 11px; color: var(--muted2); }
 
 .db-add-acc {
@@ -204,8 +240,10 @@
 
 .db-topbar-sub {
   font-size: 12px;
-  color: #bbb;
-  margin-top: 2px;
+  color: var(--muted2);
+  margin-top: 4px;
+  line-height: 1.45;
+  max-width: 52rem;
 }
 
 .db-new-conv {
@@ -499,9 +537,11 @@
 
 .db-input-hint {
   font-size: 11px;
-  color: #ccc;
+  color: var(--muted2);
   text-align: center;
   margin-top: 7px;
+  line-height: 1.4;
+  padding: 0 8px;
 }
 
 /* ── Sidebar mini stats (2×2) ──────────────────── */
@@ -582,6 +622,7 @@
   display: flex;
   gap: 7px;
   flex-wrap: wrap;
+  align-items: center;
   margin-bottom: 20px;
 }
 
@@ -589,12 +630,22 @@
   background: var(--surface);
   border: 0.5px solid var(--border2);
   border-radius: 16px;
-  padding: 5px 13px;
+  padding: 5px 12px;
+  max-width: 100%;
   font-size: 12px;
   color: var(--muted);
   cursor: pointer;
   transition: border-color 0.13s, color 0.13s, background 0.13s;
   user-select: none;
+}
+.db-chip-mail {
+  max-width: min(220px, 100%);
+}
+.db-chip-label {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .db-chip:hover { border-color: var(--accent); color: var(--primary); }
 .db-chip.active { background: var(--accent-soft); border-color: var(--accent); color: #72243E; font-weight: 600; }
@@ -756,6 +807,21 @@
   border-radius: 6px;
 }
 
+.db-sync-reauth {
+  font-size: 11px;
+  color: #92400E;
+  margin-top: 6px;
+  padding: 6px 8px;
+  background: #FFFBEB;
+  border: 0.5px solid #FCD34D;
+  border-radius: 6px;
+}
+.db-sync-reauth-link {
+  color: #92400E;
+  font-weight: 700;
+  text-decoration: underline;
+}
+
 @keyframes spin { to { transform: rotate(360deg); } }
 .db-spin { animation: spin 0.9s linear infinite; }
 
@@ -823,6 +889,126 @@
 .db-onboard-hint {
   font-size: 12px;
   color: var(--muted2);
+}
+
+/* ── Avatar dropdown ───────────────────────────── */
+.db-avatar-wrap {
+  position: relative;
+}
+
+.db-avatar-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.12);
+  min-width: 220px;
+  max-width: min(320px, calc(100vw - 32px));
+  z-index: 200;
+  overflow: hidden;
+}
+
+.db-avatar-menu-h {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted2);
+  padding: 10px 14px 4px;
+}
+
+.db-avatar-email {
+  font-size: 12px;
+  color: var(--text);
+  padding: 4px 14px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.db-avatar-email-empty {
+  color: var(--muted2);
+  font-style: italic;
+}
+
+.db-avatar-divider {
+  height: 0.5px;
+  background: var(--border);
+  margin: 6px 0 0;
+}
+
+.db-avatar-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 9px 14px;
+  font-size: 13px;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  text-decoration: none;
+  transition: background 0.13s;
+}
+.db-avatar-item:hover { background: var(--bg); }
+
+.db-avatar-signout { color: #DC2626; }
+.db-avatar-signout:hover { background: #FEF2F2; }
+
+/* ── Bubble footer (timestamp + star) ──────────── */
+.db-bubble-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+/* ── Star / bookmark button ────────────────────── */
+.db-star-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: #ccc;
+  padding: 2px 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  transition: color 0.15s;
+  flex-shrink: 0;
+}
+.db-star-btn:hover { color: #f5c842; }
+.db-star-btn.starred { color: #f5c842; }
+
+/* ── Open in Gmail label on cards ──────────────── */
+.db-rc-gmail-link {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--primary);
+  margin-left: auto;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.db-rc:hover .db-rc-gmail-link { opacity: 1; }
+
+/* ── Chip divider between account + option chips ── */
+.db-chip-divider {
+  width: 0.5px;
+  height: 18px;
+  background: var(--border2);
+  align-self: center;
+  flex-shrink: 0;
+  margin: 0 2px;
+}
+
+/* ── No-account helper text ────────────────────── */
+.db-acc-empty {
+  font-size: 11px;
+  color: var(--muted2);
+  padding: 4px 10px 8px;
+  line-height: 1.5;
 }
 
 /* ── Responsive ────────────────────────────────── */

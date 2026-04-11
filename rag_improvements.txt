@@ -1,0 +1,299 @@
+================================================================================
+  MAIL SHERLOCK — RAG ACCURACY IMPROVEMENTS
+  Based on: Hierarchical RAG / Structured Reasoning approach
+================================================================================
+
+--------------------------------------------------------------------------------
+CORE PROBLEM
+--------------------------------------------------------------------------------
+
+Current pipeline:
+  query → encode → cosine sim → BM25 hybrid → keyword boost → Gemini rerank → top_k
+
+Issues:
+  1. Single flat embedding per email (subject + body as one blob)
+     → buries subject signal inside 2000-char body
+
+  2. Cosine similarity is symmetric
+     → "invoice overdue" and "paid invoice" are close in embedding space
+     → but only one answers "find unpaid invoices"
+
+  3. BM25 on raw tokens, no field weighting
+     → subject match worth more than body mention, but treated equally
+
+  4. Gemini reranker sees only first 400 chars of body
+     → relevant passage may be at char 800+
+
+  5. No intent-to-field mapping
+     → "did John confirm the meeting?" should weight body heavily
+     → currently query vector doesn't know this
+
+
+--------------------------------------------------------------------------------
+LAYER 1 — STRUCTURED INDEX (embeddings.py / sync logic in main.py)
+--------------------------------------------------------------------------------
+
+CHANGE: Store 3 separate embeddings per email instead of one flat one.
+
+  Current stored doc:
+    { "id": "...", "subject": "...", "body": "...", "embedding": [...] }
+
+  New stored doc:
+    {
+      "id":           "...",
+      "subject":      "Q3 invoice overdue",
+      "sender":       "billing@acme.com",
+      "body":         "...",
+      "emb_subject":  [...],   # encode(subject only)
+      "emb_body":     [...],   # encode(first 512 tokens of body)
+      "emb_combined": [...]    # encode(subject + snippet) ← keep for fallback
+    }
+
+WHERE TO CHANGE:
+  - embeddings.py → add_embeddings_inplace()
+    Add encoding for subject and body separately.
+
+  - main.py → /emails/sync and /emails/seed
+    Both call add_embeddings_inplace(), so the change propagates automatically.
+    Run POST /reindex (or re-sync) after the change to rebuild stored vectors.
+
+EXAMPLE CODE (embeddings.py):
+
+  def add_embeddings_inplace(emails: list[dict]) -> None:
+      subjects  = [e.get("subject", "") for e in emails]
+      bodies    = [e.get("body", "")[:1000] for e in emails]
+      combined  = [e.get("subject","") + " " + e.get("snippet","") for e in emails]
+
+      emb_subj  = encode(subjects)
+      emb_body  = encode(bodies)
+      emb_comb  = encode(combined)
+
+      for i, e in enumerate(emails):
+          e["emb_subject"]  = emb_subj[i].tolist()
+          e["emb_body"]     = emb_body[i].tolist()
+          e["emb_combined"] = emb_comb[i].tolist()
+          e["embedding"]    = emb_comb[i].tolist()  # keep for backwards compat
+
+
+--------------------------------------------------------------------------------
+LAYER 2 — INTENT-AWARE RETRIEVAL (agent_search.py)
+--------------------------------------------------------------------------------
+
+CHANGE: Add search_focus field to Gemini intent schema.
+
+WHY: Different queries need different field weights.
+  - "find emails about project deadline"    → focus: subject
+  - "what did Mike say about budget?"       → focus: body
+  - "emails from HR last week"              → focus: sender
+
+STEP 1: Update _UNDERSTAND_SYSTEM prompt in agent_search.py
+  Add to the JSON schema:
+
+    "search_focus": "<subject | body | sender | any>"
+
+  Add instruction:
+    "Determine which part of the email is most likely to contain the answer.
+     Use 'subject' if the query is about email topics/categories.
+     Use 'body' if the query asks what someone said or wrote.
+     Use 'sender' if the query is about who sent emails.
+     Use 'any' if unclear."
+
+STEP 2: Update _semantic_search() in main.py
+  Use search_focus to blend field embeddings:
+
+  focus = intent.get("search_focus", "any")
+  query_vec = encode([search_q])[0]
+
+  subj_vecs = np.array([e["emb_subject"]  for e in candidates], dtype=np.float32)
+  body_vecs = np.array([e["emb_body"]     for e in candidates], dtype=np.float32)
+
+  subj_scores = cosine_similarity(query_vec, subj_vecs)
+  body_scores = cosine_similarity(query_vec, body_vecs)
+
+  if focus == "subject":
+      sem_scores = 0.8 * subj_scores + 0.2 * body_scores
+  elif focus == "body":
+      sem_scores = 0.2 * subj_scores + 0.8 * body_scores
+  elif focus == "sender":
+      sem_scores = subj_scores  # sender already filtered by hard filter above
+  else:
+      sem_scores = 0.5 * subj_scores + 0.5 * body_scores
+
+
+--------------------------------------------------------------------------------
+LAYER 3 — STRUCTURED PRE-FILTERING (main.py → _semantic_search)
+--------------------------------------------------------------------------------
+
+CHANGE: Run hard filters BEFORE vector search, not after loading all 1000 emails.
+
+WHY: Vector search on 50 filtered emails >> vector search on 1000 raw emails.
+     Smaller pool = higher precision, less noise.
+
+CURRENT ORDER (wrong):
+  load 1000 emails → vector search → filter by sender/date → rerank
+
+NEW ORDER (correct):
+  load 1000 emails → filter by sender/date/flags → vector search → rerank
+
+The code restructure in _semantic_search():
+
+  # Step 1: Hard filters (fast, exact match)
+  candidates = emails
+
+  if filters:
+      if filters.get("has_attachment"):
+          filtered = [e for e in candidates if e.get("hasAttachment")]
+          if filtered: candidates = filtered
+      if filters.get("unread_only"):
+          filtered = [e for e in candidates if e.get("isUnread")]
+          if filtered: candidates = filtered
+
+  if sender_hint:
+      filtered = [e for e in candidates if sender_hint in e.get("sender","").lower()]
+      if filtered: candidates = filtered
+
+  if date_hint:
+      filtered = filter_by_date(candidates, date_hint)
+      if filtered: candidates = filtered
+
+  # Step 2: BM25 on reduced pool (not all 1000)
+  # Step 3: Vector search on reduced pool
+  # Step 4: Gemini rerank on top 15
+
+
+--------------------------------------------------------------------------------
+LAYER 4 — BETTER CONTEXT FOR GEMINI RERANKER (agent_search.py)
+--------------------------------------------------------------------------------
+
+CHANGE: Replace body[:400] with a sliding window that finds the most relevant passage.
+
+WHY: The relevant sentence may be at char 800, not char 0.
+     Gemini reranker currently misses it entirely.
+
+ADD this function to agent_search.py:
+
+  def _extract_relevant_passage(body: str, query: str, window: int = 400) -> str:
+      """Find the 400-char window in body most relevant to query keywords."""
+      query_words = set(query.lower().split())
+      best_score  = -1
+      best_passage = body[:window]
+
+      for i in range(0, max(1, len(body) - window), 100):
+          chunk = body[i : i + window]
+          score = sum(1 for w in query_words if w in chunk.lower())
+          if score > best_score:
+              best_score   = score
+              best_passage = chunk
+
+      return best_passage
+
+UPDATE rerank() in agent_search.py:
+
+  # Replace this line:
+  body_snippet = (e.get("body") or "")[:400].replace("\n", " ")
+
+  # With:
+  body_snippet = _extract_relevant_passage(
+      e.get("body") or "", user_query, window=400
+  ).replace("\n", " ")
+
+
+--------------------------------------------------------------------------------
+LAYER 5 — CROSS-EMAIL SYNTHESIS (main.py → /chat endpoint)
+--------------------------------------------------------------------------------
+
+CHANGE: After reranking, add a Gemini synthesis step that reasons across all results
+        and returns a direct answer with citations.
+
+WHY: This is the "Answer Layer" from the hierarchical RAG concept.
+     Instead of 5 independent email cards, users get a direct answer + sources.
+     This is the biggest UX improvement and makes the chat endpoint genuinely useful.
+
+ADD this function to agent_search.py:
+
+  def synthesize_answer(query: str, results: list[dict]) -> str:
+      """Ask Gemini to reason across top results and give a direct answer."""
+      if not _client or not results:
+          return ""
+
+      context_parts = []
+      for i, r in enumerate(results[:5]):
+          context_parts.append(
+              f"Email {i+1} [{r.get('date','')}] from {r.get('sender','')}:\n"
+              f"Subject: {r.get('subject','')}\n"
+              f"Body: {r.get('body','')[:600]}"
+          )
+      context = "\n\n".join(context_parts)
+
+      prompt = (
+          f"User question: {query}\n\n"
+          f"Relevant emails:\n{context}\n\n"
+          f"Based on these emails, directly answer the user's question in 2-3 sentences. "
+          f"Reference specific emails by number (e.g. 'Email 2 confirms...'). "
+          f"If none clearly answer the question, say so honestly."
+      )
+
+      try:
+          response = _client.models.generate_content(
+              model=_MODEL,
+              contents=prompt,
+              config={"temperature": 0, "max_output_tokens": 300},
+          )
+          return response.text.strip()
+      except Exception as exc:
+          logger.warning("synthesize_answer failed (%s)", exc)
+          return ""
+
+UPDATE /chat endpoint in main.py:
+
+  out = await _semantic_search(query_text, req.top_k, history=history, filters=filters)
+
+  if out.get("clarification"):
+      out["reply"] = out["clarification"]
+  else:
+      # NEW: synthesize a direct answer across results
+      answer = synthesize_answer(query_text, out.get("results", []))
+      out["reply"]  = answer if answer else f'Found {len(out["results"])} emails.'
+      out["answer"] = answer  # separate field for frontend to display prominently
+
+  return out
+
+
+--------------------------------------------------------------------------------
+IMPLEMENTATION ORDER (by impact)
+--------------------------------------------------------------------------------
+
+  Priority  | Change                                      | File(s)
+  ----------|---------------------------------------------|-------------------------
+  HIGH      | Field-level embeddings (Layer 1)            | embeddings.py, main.py
+  HIGH      | search_focus intent + weighted scoring      | agent_search.py, main.py
+  MEDIUM    | Hard-filter before vector search (Layer 3)  | main.py
+  MEDIUM    | Sliding window passage for reranker         | agent_search.py
+  NICE      | Cross-email synthesis answer                | agent_search.py, main.py
+
+  After implementing Layer 1, run POST /reindex or POST /emails/sync
+  to rebuild all stored embeddings with the new 3-field structure.
+
+
+--------------------------------------------------------------------------------
+EXPECTED ACCURACY IMPROVEMENT
+--------------------------------------------------------------------------------
+
+  Change                          | Why it helps
+  --------------------------------|----------------------------------------------
+  Field-level embeddings          | Subject query no longer drowned by body noise
+  search_focus weighting          | Right field queried for right intent
+  Pre-filtering                   | Vector search on 50 vs 1000 emails
+  Sliding window rerank context   | Gemini sees actual relevant passage
+  Cross-email synthesis           | Reasoning over results, not just ranking them
+
+  Combined: expect meaningful improvement especially on:
+  - Queries asking what someone *said* (body-heavy)
+  - Queries about email *topics* (subject-heavy)
+  - Queries with sender + topic combined
+  - Follow-up queries in conversation (already partially handled by history)
+
+
+================================================================================
+  END OF DOCUMENT
+================================================================================

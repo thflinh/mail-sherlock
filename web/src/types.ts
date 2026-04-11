@@ -23,5 +23,7 @@ export interface SearchResponse {
   reply?: string;
   results: EmailResult[];
   gmailAuthEmail?: string | null;
+  /** Connected Gmail addresses (order preserved; first is primary for greetings). */
+  accounts?: string[];
   intent?: Record<string, unknown>;
 }
