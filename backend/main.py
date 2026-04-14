@@ -9,6 +9,7 @@ import html
 import json
 import numpy as np
 import os
+import uuid
 from pathlib import Path
 from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
@@ -18,9 +19,12 @@ from googleapiclient.errors import HttpError as GmailHttpError
 import asyncio
 import base64
 import concurrent.futures
+import hashlib
 import logging
+import secrets
 import time
 from datetime import datetime, timezone
+from pymongo import UpdateOne
 from pymongo.errors import PyMongoError
 
 logger = logging.getLogger(__name__)
@@ -35,7 +39,10 @@ from embeddings import (
     encode,
     warmup,
 )
-from agent_search import understand_query, rerank, synthesize_answer
+from agent_search import understand_query, rerank
+from agent import find as agent_find, answer as agent_answer, summarize as agent_summarize, extract as agent_extract, chitchat as agent_chitchat
+from reader import get_email_for_reader
+from labels import assign_labels_bulk
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 CREDENTIALS_FILE = Path(__file__).parent / "credentials.json"  # local dev fallback
@@ -328,15 +335,25 @@ async def _incremental_sync_account(db, account_email: str, creds: Credentials) 
             await _set_account_last_sync(db, account_email, int(time.time()))
             return 0
 
-        emails = []
-        for msg in messages:
-            raw = service.users().messages().get(userId="me", id=msg["id"], format="full").execute()
-            emails.append(_raw_message_to_doc(raw, account_email))
+        def _fetch_raw(msg_id: str) -> dict:
+            svc = build("gmail", "v1", credentials=creds)
+            raw = svc.users().messages().get(userId="me", id=msg_id, format="full").execute()
+            return _raw_message_to_doc(raw, account_email)
+
+        loop = asyncio.get_running_loop()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+            futures = [
+                asyncio.ensure_future(loop.run_in_executor(pool, _fetch_raw, m["id"]))
+                for m in messages
+            ]
+            emails: list[dict] = list(await asyncio.gather(*futures))
 
         add_embeddings_inplace(emails)
+        assign_labels_bulk(emails)
 
-        for email in emails:
-            await db["emails"].update_one({"id": email["id"]}, {"$set": email}, upsert=True)
+        if emails:
+            ops = [UpdateOne({"id": e["id"]}, {"$set": e}, upsert=True) for e in emails]
+            await db["emails"].bulk_write(ops, ordered=False)
 
         await _set_account_last_sync(db, account_email, int(time.time()))
         logger.info("Auto-sync [%s]: upserted %d new email(s).", account_email, len(emails))
@@ -390,7 +407,7 @@ app = FastAPI(title="mail-sherlock", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["GET", "POST"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
@@ -400,6 +417,25 @@ if (_STATIC_DIR / "assets").exists():
 
 
 _flows = {}
+
+
+class EmailSignupRequest(BaseModel):
+    name: str
+    email: str
+    password: str
+
+
+class EmailLoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+def _hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+
+
+def _new_session_token() -> str:
+    return secrets.token_urlsafe(32)
 
 
 @app.get("/ready")
@@ -434,6 +470,129 @@ def landing_page():
             status_code=500,
         )
     return HTMLResponse(LANDING_FILE.read_text(encoding="utf-8"))
+
+
+@app.post("/auth/logout")
+async def auth_logout():
+    """Remove all stored OAuth tokens and accounts so the user is fully signed out.
+
+    Clears:
+      - MongoDB settings.gmail_accounts (all account rows)
+      - MongoDB settings.oauth_token    (legacy single-token doc)
+      - MongoDB settings.active_account
+      - backend/token.json              (local dev fallback)
+    Does NOT delete indexed emails — those stay cached for a potential re-connect.
+    """
+    db = get_db()
+    await db["settings"].delete_one({"_id": ACCOUNTS_DOC_ID})
+    await db["settings"].delete_one({"_id": TOKEN_DOC_ID})
+    await db["settings"].delete_one({"_id": "active_account"})
+    if TOKEN_FILE.exists():
+        try:
+            TOKEN_FILE.unlink()
+        except OSError:
+            pass
+    return {"ok": True}
+
+
+@app.post("/auth/signup")
+async def auth_signup(payload: EmailSignupRequest):
+    db = get_db()
+    name = payload.name.strip()
+    email = payload.email.strip().lower()
+    password = payload.password
+    if not name:
+        raise HTTPException(status_code=400, detail="Name is required.")
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required.")
+    if len(password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
+
+    existing = await db["users_auth"].find_one({"email": email})
+    if existing:
+        raise HTTPException(status_code=409, detail="Email already registered.")
+
+    user_id = str(uuid.uuid4())
+    await db["users_auth"].insert_one(
+        {
+            "_id": user_id,
+            "name": name,
+            "email": email,
+            "password_hash": _hash_password(password),
+            "created_at": datetime.utcnow().isoformat(),
+        }
+    )
+    token = _new_session_token()
+    await db["auth_sessions"].insert_one(
+        {
+            "_id": token,
+            "user_id": user_id,
+            "email": email,
+            "created_at": datetime.utcnow().isoformat(),
+        }
+    )
+    return {
+        "ok": True,
+        "token": token,
+        "user": {"id": user_id, "name": name, "email": email},
+    }
+
+
+@app.post("/auth/login/email")
+async def auth_login_email(payload: EmailLoginRequest):
+    db = get_db()
+    email = payload.email.strip().lower()
+    password = payload.password
+    if not email or not password:
+        raise HTTPException(status_code=400, detail="Email and password are required.")
+
+    user = await db["users_auth"].find_one({"email": email})
+    if not user or user.get("password_hash") != _hash_password(password):
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+    token = _new_session_token()
+    await db["auth_sessions"].insert_one(
+        {
+            "_id": token,
+            "user_id": user["_id"],
+            "email": email,
+            "created_at": datetime.utcnow().isoformat(),
+        }
+    )
+    return {
+        "ok": True,
+        "token": token,
+        "user": {"id": user["_id"], "name": user.get("name", ""), "email": email},
+    }
+
+
+@app.get("/auth/session")
+async def auth_session(token: Optional[str] = None):
+    if not token:
+        return {"authenticated": False}
+    db = get_db()
+    sess = await db["auth_sessions"].find_one({"_id": token})
+    if not sess:
+        return {"authenticated": False}
+    user = await db["users_auth"].find_one({"_id": sess.get("user_id")}) if sess.get("user_id") else None
+    return {
+        "authenticated": True,
+        "user": {
+            "id": sess.get("user_id"),
+            "email": sess.get("email"),
+            "name": (user or {}).get("name", ""),
+        },
+    }
+
+
+@app.post("/auth/session/logout")
+async def auth_session_logout(body: dict):
+    token = (body.get("token") or "").strip()
+    if not token:
+        return {"ok": True}
+    db = get_db()
+    await db["auth_sessions"].delete_one({"_id": token})
+    return {"ok": True}
 
 
 @app.get("/auth/login")
@@ -517,15 +676,75 @@ class ChatMessage(BaseModel):
 class FilterOptions(BaseModel):
     has_attachment: bool = False
     unread_only: bool = False
+    last_30_days: bool = False
     account_email: Optional[str] = None
 
 
 class ChatRequest(BaseModel):
-    """Multi-turn chat: the server embeds all user lines together for context-aware search."""
+    """Multi-turn chat with mode-routing through the Gemini agent."""
 
     messages: list[ChatMessage]
     top_k: int = 5
     filters: Optional[FilterOptions] = None
+    active_email_id: Optional[str] = None
+
+
+class EventCreate(BaseModel):
+    title: str
+    date: str
+    time: Optional[str] = None
+    description: Optional[str] = None
+    source_email_id: Optional[str] = None
+
+
+@app.post("/events")
+async def create_event(event: EventCreate):
+    db = get_db()
+    doc = {
+        "_id": str(uuid.uuid4()),
+        "title": event.title.strip(),
+        "date": event.date,
+        "time": event.time,
+        "description": event.description,
+        "source": "manual" if not event.source_email_id else "from_email",
+        "source_email_id": event.source_email_id,
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    await db["events"].insert_one(doc)
+    out = dict(doc)
+    out["id"] = out.pop("_id")
+    return {"ok": True, "event": out}
+
+
+@app.get("/events")
+async def get_events():
+    db = get_db()
+    rows = await db["events"].find(
+        {},
+        {
+            "_id": 1,
+            "title": 1,
+            "date": 1,
+            "time": 1,
+            "description": 1,
+            "source": 1,
+            "source_email_id": 1,
+            "created_at": 1,
+        },
+    ).to_list(length=1000)
+    events = []
+    for e in rows:
+        e["id"] = e.pop("_id")
+        events.append(e)
+    events.sort(key=lambda e: ((e.get("date") or ""), (e.get("time") or ""), (e.get("title") or "")))
+    return {"events": events}
+
+
+@app.delete("/events/{event_id}")
+async def delete_event(event_id: str):
+    db = get_db()
+    await db["events"].delete_one({"_id": event_id})
+    return {"ok": True}
 
 
 def _latest_user_message(messages: list[ChatMessage]) -> str:
@@ -699,37 +918,171 @@ async def ask(req: QueryRequest):
 async def chat(req: ChatRequest):
     query_text = _latest_user_message(req.messages)
     if not query_text:
-        raise HTTPException(
-            status_code=400,
-            detail="Add at least one user message with text.",
-        )
-    # Pass prior turns as history so Gemini can resolve follow-ups correctly
+        raise HTTPException(status_code=400, detail="Add at least one user message with text.")
+
     history = [{"role": m.role, "content": m.content} for m in req.messages[:-1]]
     filters = req.filters.model_dump() if req.filters else None
-    out = await _semantic_search(query_text, req.top_k, history=history, filters=filters)
 
-    _NEGATIVE_PREFIXES = (
-        "none of", "no email", "there is no", "there are no",
-        "i could not", "i couldn't", "no relevant", "based on the provided",
+    # Step 1: understand intent + detect mode
+    intent = understand_query(query_text, history=history)
+
+    if intent.get("needs_clarification"):
+        return {
+            "reply": intent.get("clarifying_question", "Could you give me more details?"),
+            "mode": "clarify",
+            "results": [],
+            "intent": intent,
+            "clarification": intent.get("clarifying_question"),
+        }
+
+    mode = intent.get("mode") or "find"
+
+    # chitchat: no search needed
+    if mode == "chitchat":
+        resp = agent_chitchat(query_text, conversation=history)
+        return {"reply": resp.reply, "mode": resp.mode, "results": [], "intent": intent}
+
+    # Step 2: hybrid search to get candidates (used by find/answer/summarize/extract)
+    search_result = await _semantic_search(query_text, req.top_k, history=history, filters=filters)
+    candidates = search_result.get("results", [])
+    gmail_auth_email = search_result.get("gmailAuthEmail")
+    connected_accounts = search_result.get("accounts", [])
+
+    # Step 3: route by mode
+    if mode == "answer":
+        # Use active_email_id if provided (email open in reader), else top search result
+        db = get_db()
+        email_doc = None
+        if req.active_email_id:
+            email_doc = await db["emails"].find_one({"id": req.active_email_id}, {"_id": 0})
+        if not email_doc and candidates:
+            top_id = candidates[0].get("id")
+            if top_id:
+                email_doc = await db["emails"].find_one({"id": top_id}, {"_id": 0})
+            if not email_doc:
+                email_doc = candidates[0]
+        if not email_doc:
+            return {
+                "reply": "I couldn't find a relevant email to answer that question from.",
+                "mode": mode,
+                "results": [],
+                "intent": intent,
+            }
+        resp = agent_answer(query_text, email_doc, conversation=history)
+
+    elif mode == "summarize":
+        # Summarize top candidates (or the active email if open)
+        emails_to_summarize = candidates[:5]
+        if req.active_email_id and not emails_to_summarize:
+            db = get_db()
+            doc = await db["emails"].find_one({"id": req.active_email_id}, {"_id": 0})
+            if doc:
+                emails_to_summarize = [doc]
+        resp = agent_summarize(emails_to_summarize, query_text)
+
+    elif mode == "extract":
+        extract_field = intent.get("extract_field") or "information"
+        db = get_db()
+        email_doc = None
+        if req.active_email_id:
+            email_doc = await db["emails"].find_one({"id": req.active_email_id}, {"_id": 0})
+        if not email_doc and candidates:
+            top_id = candidates[0].get("id")
+            if top_id:
+                email_doc = await db["emails"].find_one({"id": top_id}, {"_id": 0})
+            if not email_doc:
+                email_doc = candidates[0]
+        if not email_doc:
+            return {
+                "reply": "I couldn't find a relevant email to extract from.",
+                "mode": mode,
+                "results": [],
+                "intent": intent,
+            }
+        resp = agent_extract(extract_field, email_doc)
+
+    else:  # mode == "find" (default)
+        resp = agent_find(query_text, candidates, conversation=history)
+
+    return {
+        "reply": resp.reply,
+        "mode": resp.mode,
+        "results": resp.results,
+        "intent": intent,
+        "gmailAuthEmail": gmail_auth_email,
+        "accounts": connected_accounts,
+        "clarification": None,
+    }
+
+
+@app.get("/email/{email_id}")
+async def get_email(email_id: str):
+    """Fetch full email content for the in-app reading panel."""
+    db = get_db()
+    doc = await get_email_for_reader(email_id, db)
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"Email {email_id} not found.")
+    return doc
+
+
+@app.get("/accounts")
+async def get_accounts():
+    """Return all connected accounts with status, email count, and last-synced time."""
+    db = get_db()
+    rows = await _get_gmail_account_rows(db)
+
+    # Determine the active account (explicitly set or first in list)
+    active_doc = await db["settings"].find_one({"_id": "active_account"})
+    active_email = (active_doc.get("active") or "").strip() if active_doc else ""
+    if not active_email and rows:
+        active_email = (rows[0].get("email") or "").strip()
+
+    accounts_out = []
+    for row in rows:
+        email = (row.get("email") or "").strip()
+        if not email:
+            continue
+        try:
+            email_count = await db["emails"].count_documents({"accountEmail": email})
+        except PyMongoError:
+            email_count = 0
+        last_synced = row.get("last_sync_at")  # Unix timestamp or None
+        status = "active" if email == active_email else "cached"
+        accounts_out.append({
+            "email": email,
+            "status": status,
+            "emailCount": email_count,
+            "lastSynced": last_synced,
+        })
+
+    return {"active": active_email or None, "accounts": accounts_out}
+
+
+@app.post("/accounts/switch")
+async def switch_account(body: dict):
+    """Switch the active account to a connected one."""
+    email = (body.get("email") or "").strip()
+    if not email:
+        raise HTTPException(status_code=400, detail="email required")
+
+    db = get_db()
+    rows = await _get_gmail_account_rows(db)
+    connected = [(r.get("email") or "").strip() for r in rows]
+    if email not in connected:
+        raise HTTPException(status_code=404, detail=f"Account {email} not connected")
+
+    await db["settings"].update_one(
+        {"_id": "active_account"},
+        {"$set": {"active": email}},
+        upsert=True,
     )
 
-    if out.get("clarification"):
-        out["reply"] = out["clarification"]
-    else:
-        n = len(out.get("results", []))
-        intent = out.get("intent", {})
-        topic = intent.get("topic") or query_text
-        answer = synthesize_answer(query_text, out.get("results", []))
-        # Discard any Gemini response that incorrectly says nothing was found
-        # when results exist, or that is a truncated/negative non-answer.
-        if answer and not answer.lower().startswith(_NEGATIVE_PREFIXES):
-            out["reply"] = answer
-            out["answer"] = answer
-        elif n > 0:
-            out["reply"] = f'I found **{n}** email{"s" if n != 1 else ""} related to: {topic}'
-        else:
-            out["reply"] = "I couldn't find any emails matching that description. Try rephrasing or adding more details."
-    return out
+    try:
+        email_count = await db["emails"].count_documents({"accountEmail": email})
+    except PyMongoError:
+        email_count = 0
+
+    return {"active": email, "emailCount": email_count, "status": "active"}
 
 
 @app.get("/health")
@@ -806,16 +1159,25 @@ async def _sync_account_bulk(db, account_email: str, creds: Credentials, max_res
         async for d in db["emails"].find({"accountEmail": account_email}, {"id": 1, "_id": 0})
     }
 
+    # Each worker thread gets its own service instance (googleapiclient is not
+    # thread-safe for shared use), but we avoid the discovery-document HTTP fetch
+    # on every call by reusing the instance within the same thread.
+    import threading
+    _tls = threading.local()
+
+    def _get_svc():
+        if not hasattr(_tls, "svc"):
+            _tls.svc = build("gmail", "v1", credentials=creds)
+        return _tls.svc
+
     def _list_page(page_token: str | None, batch_size: int) -> dict:
-        svc = build("gmail", "v1", credentials=creds)
         kwargs: dict = {"userId": "me", "maxResults": batch_size, "q": q}
         if page_token:
             kwargs["pageToken"] = page_token
-        return svc.users().messages().list(**kwargs).execute()
+        return _get_svc().users().messages().list(**kwargs).execute()
 
     def _fetch_one(msg_id: str) -> dict:
-        svc = build("gmail", "v1", credentials=creds)
-        raw = svc.users().messages().get(userId="me", id=msg_id, format="full").execute()
+        raw = _get_svc().users().messages().get(userId="me", id=msg_id, format="full").execute()
         return _raw_message_to_doc(raw, account_email)
 
     loop = asyncio.get_running_loop()
@@ -854,9 +1216,11 @@ async def _sync_account_bulk(db, account_email: str, creds: Credentials, max_res
         ) from e
 
     add_embeddings_inplace(emails)
+    assign_labels_bulk(emails)
     try:
-        for email in emails:
-            await db["emails"].update_one({"id": email["id"]}, {"$set": email}, upsert=True)
+        if emails:
+            ops = [UpdateOne({"id": e["id"]}, {"$set": e}, upsert=True) for e in emails]
+            await db["emails"].bulk_write(ops, ordered=False)
         await _set_account_last_sync(db, account_email, int(time.time()))
     except PyMongoError as e:
         raise HTTPException(
@@ -878,8 +1242,9 @@ async def sync_emails():
             detail="Not authenticated. Visit /auth/login to connect your Gmail account.",
         )
 
-    synced_total = 0
-    per_account: dict[str, int] = {}
+    # Build task list — one coroutine per valid account.
+    account_emails: list[str] = []
+    tasks = []
     last_error: str | None = None
     for row in rows:
         email = (row.get("email") or "").strip()
@@ -889,13 +1254,21 @@ async def sync_emails():
         if not creds:
             last_error = f"Missing credentials for {email}"
             continue
-        try:
-            n = await _sync_account_bulk(db, email, creds, max_results=2000)
-            synced_total += n
-            per_account[email] = n
-        except HTTPException as e:
-            last_error = str(e.detail)
+        account_emails.append(email)
+        tasks.append(_sync_account_bulk(db, email, creds, max_results=1000))
+
+    # Run all account syncs concurrently instead of sequentially.
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    synced_total = 0
+    per_account: dict[str, int] = {}
+    for email, result in zip(account_emails, results):
+        if isinstance(result, Exception):
+            last_error = str(result.detail) if isinstance(result, HTTPException) else str(result)
             logger.warning("Sync failed for %s: %s", email, last_error)
+        else:
+            synced_total += result
+            per_account[email] = result
 
     total = await db["emails"].count_documents({})
     accounts = await _list_connected_emails(db)
@@ -922,6 +1295,7 @@ async def seed_emails():
     path = Path(__file__).parent / "emails.json"
     emails = json.loads(path.read_text())
     add_embeddings_inplace(emails)
+    assign_labels_bulk(emails)
     try:
         await db["emails"].delete_many({})
         await db["emails"].insert_many(emails)

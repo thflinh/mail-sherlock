@@ -40,32 +40,25 @@ def document_search_text(doc: dict) -> str:
 
 
 def add_embeddings_inplace(docs: list[dict]) -> None:
-    """Compute and store 3 separate embeddings per doc for field-weighted retrieval.
+    """Compute and store 2 separate embeddings per doc for field-weighted retrieval.
 
     Stores:
       emb_subject  — subject only (high signal for topic queries)
       emb_body     — first 1000 chars of body (for "what did X say?" queries)
-      emb_combined — subject + snippet (general-purpose fallback)
-      embedding    — alias of emb_combined for backwards compat
+      embedding    — alias of emb_subject for backwards compat with old search path
     """
     if not docs:
         return
     subjects = [d.get("subject") or "" for d in docs]
     bodies   = [(d.get("body") or "")[:1000] for d in docs]
-    combined = [
-        (d.get("subject") or "") + " " + (d.get("snippet") or "")
-        for d in docs
-    ]
 
     emb_subj = encode(subjects)
     emb_body = encode(bodies)
-    emb_comb = encode(combined)
 
     for i, d in enumerate(docs):
-        d["emb_subject"]  = emb_subj[i].astype(np.float32).tolist()
-        d["emb_body"]     = emb_body[i].astype(np.float32).tolist()
-        d["emb_combined"] = emb_comb[i].astype(np.float32).tolist()
-        d["embedding"]    = d["emb_combined"]  # backwards compat
+        d["emb_subject"] = emb_subj[i].astype(np.float32).tolist()
+        d["emb_body"]    = emb_body[i].astype(np.float32).tolist()
+        d["embedding"]   = d["emb_subject"]  # backwards compat
 
 
 def warmup() -> None:

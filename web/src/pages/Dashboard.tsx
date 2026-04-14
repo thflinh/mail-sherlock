@@ -2,13 +2,18 @@ import { useState, useEffect, useRef } from "react";
 import "./Dashboard.css";
 import type { Page } from "../App";
 import iconUrl from "../assets/icon.png";
-import type { EmailResult, SearchResponse } from "../types";
+import type { AgentMode, EmailDetail, EmailResult, SearchResponse } from "../types";
+import { createEvent, deleteEvent, getEvents, type CalendarEvent } from "../api/events";
+import { getAccounts, switchAccount } from "../api/accounts";
+import { logoutSession } from "../api/auth";
+import type { Account } from "../types";
 
 interface Props {
   navigate: (to: Page) => void;
 }
 
 type Suggestion = { label: string; query: string };
+type SidebarTab = "search" | "calendar" | "history";
 
 type Message = {
   id: number;
@@ -16,6 +21,7 @@ type Message = {
   content: string;
   results?: EmailResult[];
   suggestions?: Suggestion[];
+  mode?: AgentMode;
   time: string;
 };
 
@@ -25,6 +31,12 @@ function initials(from: string): string {
   return parts.length >= 2
     ? (parts[0][0] + parts[1][0]).toUpperCase()
     : name.slice(0, 2).toUpperCase();
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1048576) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1048576).toFixed(1)} MB`;
 }
 
 function nowTime() {
@@ -56,23 +68,30 @@ function formatRelativeTime(d: Date): string {
   return d.toLocaleDateString();
 }
 
-const LABELS = [
-  { name: "Housing", dot: "#F0C4DC" },
-  { name: "Finance", dot: "#B5D4F4" },
-  { name: "Work", dot: "#9FE1CB" },
-  { name: "School", dot: "#FAC775" },
-];
+const FILTER_CHIPS = ["All", "Has attachment", "Unread", "Last 30 days"] as const;
+const WEEKDAY_LABELS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
 
+function isSameDay(a: Date, b: Date) {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
+}
+
+function eventColor(source: CalendarEvent["source"]) {
+  return source === "from_email" ? "#9B72CF" : "#185FA5";
+}
 
 export default function Dashboard({ navigate }: Props) {
   const [query, setQuery] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [typing, setTyping] = useState(false);
-  // activeChip: account-scope selection ("All accounts" or a specific email)
-  const [activeChip, setActiveChip] = useState("All accounts");
-  // activeFilters: stackable toggles ("Has attachment", "Unread only")
-  const [activeFilters, setActiveFilters] = useState<Set<string>>(new Set());
-  const [starredIds, setStarredIds] = useState<Set<number>>(new Set());
+  const [activeFilters, setActiveFilters] = useState<Set<string>>(new Set(["All"]));
+  // openEmailId: email currently open in the in-app reader panel
+  const [openEmailId, setOpenEmailId] = useState<string | null>(null);
+  const [readerEmail, setReaderEmail] = useState<EmailDetail | null>(null);
+  const [readerLoading, setReaderLoading] = useState(false);
   const [avatarOpen, setAvatarOpen] = useState(false);
   const chatRef = useRef<HTMLDivElement>(null);
   const msgIdRef = useRef(0);
@@ -83,10 +102,29 @@ export default function Dashboard({ navigate }: Props) {
   const [emailCount, setEmailCount] = useState(0);
   const [statusLoaded, setStatusLoaded] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [syncError, setSyncError] = useState<string | null>(null);
-  const [syncNeedsReauth, setSyncNeedsReauth] = useState(false);
+  const [, setSyncError] = useState<string | null>(null);
+  const [, setSyncNeedsReauth] = useState(false);
   const [syncDone, setSyncDone] = useState(false);
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
+  const [switchModalOpen, setSwitchModalOpen] = useState(false);
+  const [accountDetails, setAccountDetails] = useState<Account[]>([]);
+  const [activeAccount, setActiveAccount] = useState<string | null>(null);
+  const [switchingTo, setSwitchingTo] = useState<string | null>(null);
+  const [switchError, setSwitchError] = useState<string | null>(null);
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>("search");
+  const [sidebarSearchQuery, setSidebarSearchQuery] = useState("");
+  const [calendarMonth, setCalendarMonth] = useState(new Date());
+  const [selectedDate, setSelectedDate] = useState<Date | null>(null);
+  const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
+  const [calendarLoading, setCalendarLoading] = useState(false);
+  const [calendarError, setCalendarError] = useState<string | null>(null);
+  const [showAddEventModal, setShowAddEventModal] = useState(false);
+  const [eventTitle, setEventTitle] = useState("");
+  const [eventDate, setEventDate] = useState("");
+  const [eventTime, setEventTime] = useState("");
+  const [eventDescription, setEventDescription] = useState("");
+  const [eventSaving, setEventSaving] = useState(false);
+  const [eventSaveError, setEventSaveError] = useState<string | null>(null);
 
   function applyStatusPayload(d: {
     accounts?: string[];
@@ -99,7 +137,9 @@ export default function Dashboard({ navigate }: Props) {
         ? [d.gmailAuthEmail]
         : [];
     setAccounts(list);
-    setGmailEmail(d.gmailAuthEmail ?? list[0] ?? null);
+    const primary = d.gmailAuthEmail ?? list[0] ?? null;
+    setGmailEmail(primary);
+    setActiveAccount((prev) => prev ?? primary);
     setEmailCount(d.emailCount ?? 0);
   }
 
@@ -123,6 +163,39 @@ export default function Dashboard({ navigate }: Props) {
     return () => document.removeEventListener("visibilitychange", onVisibility);
   }, []);
 
+  async function loadCalendarEvents() {
+    setCalendarLoading(true);
+    setCalendarError(null);
+    try {
+      const events = await getEvents();
+      setCalendarEvents(events);
+    } catch (err) {
+      setCalendarError(err instanceof Error ? err.message : "Failed to load events.");
+    } finally {
+      setCalendarLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadCalendarEvents();
+  }, []);
+
+  useEffect(() => {
+    if (!switchModalOpen) return;
+    setSwitchError(null);
+    loadAccountDetails();
+  }, [switchModalOpen]);
+
+  useEffect(() => {
+    if (!showAddEventModal) return;
+    const base = selectedDate ?? new Date();
+    setEventDate(base.toISOString().slice(0, 10));
+    setEventTitle("");
+    setEventTime("");
+    setEventDescription("");
+    setEventSaveError(null);
+  }, [showAddEventModal, selectedDate]);
+
   const primaryEmail = accounts[0] ?? gmailEmail;
 
   useEffect(() => {
@@ -141,17 +214,34 @@ export default function Dashboard({ navigate }: Props) {
     ]);
   }, [statusLoaded, primaryEmail]);
 
-  useEffect(() => {
-    if (activeChip !== "All accounts" && !accounts.includes(activeChip)) {
-      setActiveChip("All accounts");
-    }
-  }, [accounts, activeChip]);
-
   function scrollToBottom() {
     setTimeout(() => {
       chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: "smooth" });
     }, 50);
   }
+
+  // Fetch full email when a result card is clicked
+  useEffect(() => {
+    if (!openEmailId) {
+      setReaderEmail(null);
+      return;
+    }
+    setReaderLoading(true);
+    fetch(`/email/${openEmailId}`)
+      .then((r) => r.json())
+      .then((d: EmailDetail) => setReaderEmail(d))
+      .catch(() => setReaderEmail(null))
+      .finally(() => setReaderLoading(false));
+  }, [openEmailId]);
+
+  // Close reader with Escape key
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape" && openEmailId) setOpenEmailId(null);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [openEmailId]);
 
   function formatEmailDate(raw: string | undefined): string {
     if (!raw) return "";
@@ -167,17 +257,13 @@ export default function Dashboard({ navigate }: Props) {
   function toggleFilter(filter: string) {
     setActiveFilters((prev) => {
       const next = new Set(prev);
+      if (filter === "All") {
+        return new Set(["All"]);
+      }
       if (next.has(filter)) next.delete(filter);
       else next.add(filter);
-      return next;
-    });
-  }
-
-  function toggleStar(id: number) {
-    setStarredIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      next.delete("All");
+      if (next.size === 0) next.add("All");
       return next;
     });
   }
@@ -243,12 +329,11 @@ export default function Dashboard({ navigate }: Props) {
         body: JSON.stringify({
           messages: historyForApi,
           top_k: 5,
+          active_email_id: openEmailId ?? undefined,
           filters: {
             has_attachment: activeFilters.has("Has attachment"),
-            unread_only: activeFilters.has("Unread only"),
-            ...(activeChip !== "All accounts" && accounts.includes(activeChip)
-              ? { account_email: activeChip }
-              : {}),
+            unread_only: activeFilters.has("Unread"),
+            last_30_days: activeFilters.has("Last 30 days"),
           },
         }),
       });
@@ -282,6 +367,7 @@ export default function Dashboard({ navigate }: Props) {
       });
 
       const count = results.length;
+      const agentMode = data.mode;
       const replyLine =
         typeof data.reply === "string" && data.reply.trim()
           ? data.reply.trim()
@@ -295,7 +381,8 @@ export default function Dashboard({ navigate }: Props) {
           id: ++msgIdRef.current,
           role: "ai",
           content: replyLine,
-          results: count > 0 ? results : undefined,
+          mode: agentMode,
+          results: count > 0 && agentMode !== "chitchat" ? results : undefined,
           suggestions:
             count > 0
               ? [
@@ -327,8 +414,48 @@ export default function Dashboard({ navigate }: Props) {
     }
   }
 
-  function clearChat() {
-    const name = primaryEmail ? primaryEmail.split("@")[0].split(".")[0] : null;
+  async function loadAccountDetails() {
+    try {
+      const data = await getAccounts();
+      setAccountDetails(data.accounts);
+      if (data.active) setActiveAccount(data.active);
+    } catch {
+      // Keep existing UI if load fails.
+    }
+  }
+
+  async function handleSwitchAccount(email: string) {
+    if (email === activeAccount || switchingTo) return;
+    setSwitchingTo(email);
+    setSwitchError(null);
+    try {
+      const result = await switchAccount(email);
+      setActiveAccount(result.active);
+      setGmailEmail(result.active);
+      setEmailCount(result.emailCount);
+      setAccounts((prev) => {
+        const rest = prev.filter((a) => a !== result.active);
+        return [result.active, ...rest];
+      });
+      setAccountDetails((prev) =>
+        prev.map((a) => ({
+          ...a,
+          status: a.email === result.active ? "active" : "cached",
+          emailCount: a.email === result.active ? result.emailCount : a.emailCount,
+        })),
+      );
+      setSwitchModalOpen(false);
+      clearChat(result.active);
+    } catch (err) {
+      setSwitchError(err instanceof Error ? err.message : "Switch failed.");
+    } finally {
+      setSwitchingTo(null);
+    }
+  }
+
+  function clearChat(forEmail?: string) {
+    const email = forEmail ?? primaryEmail;
+    const name = email ? email.split("@")[0].split(".")[0] : null;
     setMessages([
       {
         id: ++msgIdRef.current,
@@ -342,13 +469,45 @@ export default function Dashboard({ navigate }: Props) {
     ]);
   }
 
+  async function handleCreateEvent() {
+    if (!eventTitle.trim()) {
+      setEventSaveError("Title is required.");
+      return;
+    }
+    if (!eventDate) {
+      setEventSaveError("Date is required.");
+      return;
+    }
+    setEventSaving(true);
+    setEventSaveError(null);
+    try {
+      await createEvent({
+        title: eventTitle.trim(),
+        date: eventDate,
+        time: eventTime || undefined,
+        description: eventDescription.trim() || undefined,
+      });
+      setShowAddEventModal(false);
+      await loadCalendarEvents();
+    } catch (err) {
+      setEventSaveError(err instanceof Error ? err.message : "Failed to create event.");
+    } finally {
+      setEventSaving(false);
+    }
+  }
+
+  async function handleDeleteEvent(eventId: string) {
+    try {
+      await deleteEvent(eventId);
+      await loadCalendarEvents();
+    } catch {
+      // Keep UI stable even if delete fails.
+    }
+  }
+
   const userInitials = primaryEmail ? initials(primaryEmail) : "?";
   const firstName = primaryEmail ? primaryEmail.split("@")[0].split(".")[0] : "there";
   const accountCount = accounts.length > 0 ? accounts.length : primaryEmail ? 1 : 0;
-
-  // Account chips are mutually exclusive; Has attachment / Unread only stack on top
-  const accountChips: string[] = ["All accounts", ...accounts];
-  const OPTION_CHIPS = ["Has attachment", "Unread only"];
 
   const topbarLine = (() => {
     if (!primaryEmail) return "Connect Gmail to get started";
@@ -369,45 +528,51 @@ export default function Dashboard({ navigate }: Props) {
 
   const canSearch = statusLoaded && !!primaryEmail;
   const sendDisabled = !query.trim() || typing || !canSearch;
-  const connected = accounts.length > 0 || !!primaryEmail;
+  const sidebarPanelLabel =
+    sidebarTab === "search" ? "Search" : sidebarTab === "calendar" ? "Calendar" : "History";
+  const accountPillLabel = primaryEmail ?? "No account connected";
+  const messageSearchPool = messages.filter((m) => m.role === "user" || m.results?.length);
+  const sidebarSearchResults = sidebarSearchQuery.trim()
+    ? messageSearchPool.filter((m) =>
+        m.content.toLowerCase().includes(sidebarSearchQuery.trim().toLowerCase()),
+      )
+    : [];
+  const parsedCalendarEvents = calendarEvents
+    .map((e) => ({ ...e, dateObj: new Date(e.date) }))
+    .filter((e) => !isNaN(e.dateObj.getTime()));
+  const monthStart = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1);
+  const calendarStart = new Date(monthStart);
+  calendarStart.setDate(calendarStart.getDate() - calendarStart.getDay());
+  const calendarCells = Array.from({ length: 42 }, (_, idx) => {
+    const d = new Date(calendarStart);
+    d.setDate(calendarStart.getDate() + idx);
+    return d;
+  });
+  const visibleEvents = selectedDate
+    ? parsedCalendarEvents.filter((e) => isSameDay(e.dateObj, selectedDate))
+    : parsedCalendarEvents
+        .filter((e) => e.dateObj.getTime() >= new Date(new Date().setHours(0, 0, 0, 0)).getTime())
+        .sort((a, b) => a.dateObj.getTime() - b.dateObj.getTime())
+        .slice(0, 6);
 
   return (
     <div className="db">
       <nav className="db-nav">
-        <div className="db-nav-left">
-          <div className="db-logo">
-            <img src={iconUrl} alt="" width={30} height={30} style={{ objectFit: "contain" }} />
-            Mail Sherlock
+        <button type="button" className="db-logo db-logo-btn" onClick={() => clearChat()}>
+          <div className="db-logo-mark">
+            <img src={iconUrl} alt="" width={48} height={48} style={{ objectFit: "contain" }} />
           </div>
-          <div className="db-nav-links">
-            <span className="db-nav-link active">Dashboard</span>
-            <span className="db-nav-link">Accounts</span>
-            <span className="db-nav-link">Insights</span>
-            <span className="db-nav-link">Settings</span>
-          </div>
-        </div>
+          <span className="db-logo-wordmark">Mail Sherlock</span>
+        </button>
+        <button type="button" className="db-account-pill" onClick={() => setSwitchModalOpen(true)}>
+          <span className="db-account-pill-dot" />
+          <span className="db-account-pill-text">{accountPillLabel}</span>
+          <span className="db-account-pill-caret">▾</span>
+        </button>
         <div className="db-nav-right">
-          {connected ? (
-            <a
-              href="/auth/login"
-              className="db-btn-add-mailbox"
-              title="Sign in with another Google account in the browser"
-            >
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden>
-                <line x1="6" y1="1" x2="6" y2="11" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-                <line x1="1" y1="6" x2="11" y2="6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-              </svg>
-              Add mailbox
-            </a>
-          ) : (
-            <a href="/auth/login" className="db-btn-connect">
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden>
-                <line x1="6" y1="1" x2="6" y2="11" stroke="white" strokeWidth="1.6" strokeLinecap="round" />
-                <line x1="1" y1="6" x2="11" y2="6" stroke="white" strokeWidth="1.6" strokeLinecap="round" />
-              </svg>
-              Connect Gmail
-            </a>
-          )}
+          <button type="button" className="db-new-conv" onClick={() => clearChat()}>
+            New chat
+          </button>
           <div className="db-avatar-wrap">
             <button
               type="button"
@@ -419,25 +584,70 @@ export default function Dashboard({ navigate }: Props) {
             </button>
             {avatarOpen && (
               <div className="db-avatar-menu" onMouseLeave={() => setAvatarOpen(false)}>
-                <div className="db-avatar-menu-h">Connected mailboxes</div>
-                {accounts.length === 0 ? (
-                  <div className="db-avatar-email db-avatar-email-empty">No Gmail linked yet</div>
-                ) : (
-                  accounts.map((a) => (
-                    <div key={a} className="db-avatar-email" title={a}>
-                      {a}
-                    </div>
-                  ))
-                )}
+                <div className="db-avatar-menu-h">Signed in</div>
+                <div className="db-avatar-email" title={accountPillLabel}>
+                  {accountPillLabel}
+                </div>
                 <div className="db-avatar-divider" />
+                <button
+                  type="button"
+                  className="db-avatar-item"
+                  onClick={() => {
+                    setAvatarOpen(false);
+                    setSwitchModalOpen(true);
+                  }}
+                >
+                  <span className="db-avatar-item-icon">
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                      <circle cx="7" cy="4.3" r="2.2" stroke="currentColor" strokeWidth="1.3" />
+                      <path d="M2.4 11.8c.8-2 2.5-3 4.6-3s3.8 1 4.6 3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+                    </svg>
+                  </span>
+                  Accounts
+                </button>
+                <button type="button" className="db-avatar-item" onClick={() => setAvatarOpen(false)}>
+                  <span className="db-avatar-item-icon">
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                      <path d="M2 11V8.5M5.4 11V6M8.6 11V4M12 11V2.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+                    </svg>
+                  </span>
+                  Insights
+                </button>
+                <button type="button" className="db-avatar-item" onClick={() => setAvatarOpen(false)}>
+                  <span className="db-avatar-item-icon">
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                      <circle cx="7" cy="7" r="2.1" stroke="currentColor" strokeWidth="1.3" />
+                      <path d="M7 1.5v1.5M7 11v1.5M1.5 7H3M11 7h1.5M3 3l1 1M10 10l1 1M3 11l1-1M10 4l1-1" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                    </svg>
+                  </span>
+                  Settings
+                </button>
                 <a href="/auth/login" className="db-avatar-item" onClick={() => setAvatarOpen(false)}>
-                  Add or manage Gmail
+                  <span className="db-avatar-item-icon">
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                      <path d="M7 2v10M2 7h10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+                    </svg>
+                  </span>
+                  Connect Gmail
                 </a>
                 <button
                   type="button"
                   className="db-avatar-item db-avatar-signout"
-                  onClick={() => { setAvatarOpen(false); navigate("landing"); }}
+                  onClick={async () => {
+                    setAvatarOpen(false);
+                    const token = localStorage.getItem("mailSherlockAuthToken");
+                    if (token) await logoutSession(token).catch(() => {});
+                    await fetch("/auth/logout", { method: "POST" }).catch(() => {});
+                    localStorage.removeItem("mailSherlockAuthToken");
+                    navigate("landing");
+                  }}
                 >
+                  <span className="db-avatar-item-icon">
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                      <path d="M5.5 2.2H3.4c-.6 0-1 .4-1 1v7.6c0 .6.4 1 1 1h2.1" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+                      <path d="M8 4.5l2.6 2.5L8 9.5M10.4 7H5.6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </span>
                   Sign out
                 </button>
               </div>
@@ -448,146 +658,181 @@ export default function Dashboard({ navigate }: Props) {
 
       <div className="db-layout">
         <aside className="db-sidebar">
-          <div className="db-sidebar-section db-sidebar-accounts">
-            <div className="db-sidebar-label">Accounts</div>
-            {accounts.length > 0 ? (
-              <>
-                {accounts.map((acc) => (
-                  <div key={acc} className="db-acc-item" title={acc}>
-                    <div className="db-acc-dot" style={{ background: "#34A853" }} />
-                    <div className="db-acc-name">{acc}</div>
-                    {accounts.length === 1 && emailCount > 0 && (
-                      <div className="db-acc-count">{emailCount.toLocaleString()}</div>
+          <div className="db-sidebar-tabrail">
+            <div className="db-sidebar-tabrow">
+              <button
+                type="button"
+                className={`db-sidebar-tabbtn${sidebarTab === "search" ? " active" : ""}`}
+                onClick={() => setSidebarTab("search")}
+                aria-label="Search panel"
+              >
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <circle cx="6.3" cy="6.3" r="4.2" stroke="currentColor" strokeWidth="1.5" />
+                  <path d="M9.6 9.6L12.4 12.4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                className={`db-sidebar-tabbtn${sidebarTab === "calendar" ? " active" : ""}`}
+                onClick={() => setSidebarTab("calendar")}
+                aria-label="Calendar panel"
+              >
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <rect x="1.7" y="2.6" width="10.6" height="9.7" rx="2" stroke="currentColor" strokeWidth="1.3" />
+                  <path d="M1.7 5.2h10.6M4.6 1.5v2.2M9.4 1.5v2.2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                className={`db-sidebar-tabbtn${sidebarTab === "history" ? " active" : ""}`}
+                onClick={() => setSidebarTab("history")}
+                aria-label="History panel"
+              >
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <path d="M2.4 4h9.2M2.4 7h9.2M2.4 10h6.2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                </svg>
+              </button>
+              <span className="db-sidebar-tablabel">{sidebarPanelLabel}</span>
+            </div>
+          </div>
+          {sidebarTab === "search" && (
+            <div className="db-sidebar-panel">
+              <input
+                className="db-side-search"
+                value={sidebarSearchQuery}
+                onChange={(e) => setSidebarSearchQuery(e.target.value)}
+                placeholder="Search emails & chats..."
+              />
+              {sidebarSearchQuery.trim() ? (
+                <div className="db-side-list">
+                  {sidebarSearchResults.length === 0 && <div className="db-side-empty">No matches yet</div>}
+                  {sidebarSearchResults.slice(0, 8).map((m) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      className="db-side-item"
+                      onClick={() =>
+                        chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: "smooth" })
+                      }
+                    >
+                      <div className="db-side-item-title">{m.content.slice(0, 56)}</div>
+                      <div className="db-side-item-meta">
+                        {m.role === "user" ? "Conversation" : "Email results"} · {m.time}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="db-side-empty-hero">Search your emails & chats</div>
+              )}
+            </div>
+          )}
+          {sidebarTab === "calendar" && (
+            <div className="db-sidebar-panel">
+              <div className="db-side-cal-head">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1, 1))
+                  }
+                >
+                  ←
+                </button>
+                <span>{calendarMonth.toLocaleDateString([], { month: "long", year: "numeric" })}</span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 1))
+                  }
+                >
+                  →
+                </button>
+              </div>
+              <div className="db-side-cal-grid">
+                {WEEKDAY_LABELS.map((d) => (
+                  <div key={d} className="db-side-cal-dow">
+                    {d}
+                  </div>
+                ))}
+                {calendarCells.map((d) => {
+                  const inMonth = d.getMonth() === calendarMonth.getMonth();
+                  const hasEvent = parsedCalendarEvents.some((e) => isSameDay(e.dateObj, d));
+                  const isSelected = selectedDate ? isSameDay(selectedDate, d) : false;
+                  const isToday = isSameDay(new Date(), d);
+                  return (
+                    <button
+                      key={d.toISOString()}
+                      type="button"
+                      className={`db-side-cal-day${inMonth ? "" : " out"}${isSelected ? " sel" : ""}${isToday ? " today" : ""}`}
+                      onClick={() => setSelectedDate(isSelected ? null : d)}
+                    >
+                      <span>{d.getDate()}</span>
+                      {hasEvent && <em />}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="db-side-events">
+                {calendarLoading && <div className="db-side-empty">Loading events...</div>}
+                {calendarError && <div className="db-side-empty">{calendarError}</div>}
+                {visibleEvents.length === 0 && <div className="db-side-empty">No events</div>}
+                {visibleEvents.map((e) => (
+                  <div key={e.id} className="db-side-event-wrap">
+                    <button
+                      type="button"
+                      className="db-side-event"
+                      onClick={() => {
+                        if (e.source_email_id) setOpenEmailId(e.source_email_id);
+                      }}
+                    >
+                    <span className="db-side-event-bar" style={{ background: eventColor(e.source) }} />
+                    <span className="db-side-event-main">
+                      <strong>{e.title}</strong>
+                      <small>
+                        {e.dateObj.toLocaleDateString([], { month: "short", day: "numeric" })}
+                        {e.time ? ` · ${e.time}` : ""}
+                        {e.source === "from_email" ? " · from email" : " · manual"}
+                      </small>
+                    </span>
+                    </button>
+                    {e.source === "manual" && (
+                      <button
+                        type="button"
+                        className="db-side-event-del"
+                        onClick={() => handleDeleteEvent(e.id)}
+                        aria-label="Delete event"
+                        title="Delete event"
+                      >
+                        ×
+                      </button>
                     )}
                   </div>
                 ))}
-                <button type="button" className="db-sync-btn" onClick={handleSync} disabled={syncing}>
-                  {syncing ? (
-                    <>
-                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="db-spin">
-                        <circle cx="6" cy="6" r="4.5" stroke="#9B72CF" strokeWidth="1.5" strokeDasharray="14 8" />
-                      </svg>
-                      Syncing…
-                    </>
-                  ) : (
-                    <>
-                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden>
-                        <path d="M10 6A4 4 0 1 1 6 2" stroke="#9B72CF" strokeWidth="1.5" strokeLinecap="round" />
-                        <path d="M6 2l2-2M6 2l2 2" stroke="#9B72CF" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-                      </svg>
-                      {syncDone ? "Re-sync all" : "Sync inboxes"}
-                    </>
-                  )}
-                </button>
-                {syncDone && (
-                  <div className="db-sync-ok">
-                    {emailCount.toLocaleString()} indexed across {accountCount}{" "}
-                    {accountCount === 1 ? "account" : "accounts"}
-                  </div>
-                )}
-                {syncNeedsReauth && (
-                  <div className="db-sync-reauth">
-                    Session expired —{" "}
-                    <a href="/auth/login" className="db-sync-reauth-link">
-                      reconnect Gmail
-                    </a>
-                  </div>
-                )}
-                {syncError && <div className="db-sync-err">{syncError}</div>}
-              </>
-            ) : (
-              <div className="db-acc-empty">Connect a Gmail account to index your mail.</div>
-            )}
-            <a href="/auth/login" className="db-add-acc">
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden>
-                <line x1="6" y1="1" x2="6" y2="11" stroke="#9B72CF" strokeWidth="1.6" strokeLinecap="round" />
-                <line x1="1" y1="6" x2="11" y2="6" stroke="#9B72CF" strokeWidth="1.6" strokeLinecap="round" />
-              </svg>
-              {accounts.length > 0 ? "Add another mailbox" : "Add Gmail account"}
-            </a>
-          </div>
-
-          <div className="db-sidebar-section">
-            <div className="db-sidebar-label">Menu</div>
-            {[
-              {
-                label: "Search",
-                active: true,
-                icon: (
-                  <>
-                    <circle cx="6.5" cy="6.5" r="4.5" stroke="currentColor" strokeWidth="1.4" />
-                    <line x1="10" y1="10" x2="14" y2="14" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-                  </>
-                ),
-              },
-              {
-                label: "All emails",
-                active: false,
-                icon: (
-                  <>
-                    <rect x="2" y="3" width="12" height="9" rx="2" stroke="currentColor" strokeWidth="1.3" />
-                    <path d="M5 7h6M5 10h4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                  </>
-                ),
-              },
-              {
-                label: "Starred",
-                active: false,
-                icon: (
-                  <path d="M8 2l1.5 3.5L13 6l-2.5 2.5.5 3.5L8 10.5 5 12l.5-3.5L3 6l3.5-.5z" stroke="currentColor" strokeWidth="1.2" fill="none" />
-                ),
-              },
-              {
-                label: "Attachments",
-                active: false,
-                icon: (
-                  <>
-                    <rect x="2" y="2" width="12" height="12" rx="3" stroke="currentColor" strokeWidth="1.3" />
-                    <path d="M5 8h6M5 5h6M5 11h4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                  </>
-                ),
-              },
-            ].map((item) => (
-              <div key={item.label} className={`db-sidebar-item${item.active ? " active" : ""}`}>
-                <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-                  {item.icon}
-                </svg>
-                {item.label}
               </div>
-            ))}
-          </div>
-
-          <div className="db-sidebar-section">
-            <div className="db-sidebar-label">Labels</div>
-            {LABELS.map((l) => (
-              <div key={l.name} className="db-sidebar-item">
-                <span className="db-label-dot" style={{ background: l.dot }} />
-                {l.name}
-              </div>
-            ))}
-          </div>
-
-          {connected && (
-            <div className="db-sidebar-section">
-              <div className="db-sidebar-label">Stats</div>
-              <div className="db-stat-mini">
-                <div className="db-sm">
-                  <div className="db-sm-n">{emailCount.toLocaleString()}</div>
-                  <div className="db-sm-l">Indexed</div>
-                </div>
-                <div className="db-sm">
-                  <div className="db-sm-n">{accountCount}</div>
-                  <div className="db-sm-l">Accounts</div>
-                </div>
-                <div className="db-sm db-sm-muted">
-                  <div className="db-sm-n">—</div>
-                  <div className="db-sm-l">Unread</div>
-                </div>
-                <div className="db-sm db-sm-muted">
-                  <div className="db-sm-n">—</div>
-                  <div className="db-sm-l">Attachments</div>
-                </div>
-              </div>
+              <button type="button" className="db-side-add-event" onClick={() => setShowAddEventModal(true)}>
+                + Add event
+              </button>
+            </div>
+          )}
+          {sidebarTab === "history" && (
+            <div className="db-sidebar-panel">
+              <div className="db-side-history-group">Recent</div>
+              {messages
+                .slice(-8)
+                .reverse()
+                .map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    className="db-side-item"
+                    onClick={() =>
+                      chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: "smooth" })
+                    }
+                  >
+                    <div className="db-side-item-title">{m.content.slice(0, 52)}</div>
+                    <div className="db-side-item-meta">{m.time}</div>
+                  </button>
+                ))}
             </div>
           )}
         </aside>
@@ -601,26 +846,9 @@ export default function Dashboard({ navigate }: Props) {
                 </h1>
                 <p className="db-topbar-sub">{topbarLine}</p>
               </div>
-              <button type="button" className="db-new-conv" onClick={clearChat}>
-                New conversation
-              </button>
             </div>
             <div className="db-chips">
-              {accountChips.map((chip) => (
-                <div
-                  key={chip}
-                  className={`db-chip${activeChip === chip ? " active" : ""}${chip.includes("@") ? " db-chip-mail" : ""}`}
-                  onClick={() => setActiveChip(chip)}
-                  onKeyDown={(e) => e.key === "Enter" && setActiveChip(chip)}
-                  role="button"
-                  tabIndex={0}
-                  title={chip.includes("@") ? chip : undefined}
-                >
-                  <span className="db-chip-label">{chip}</span>
-                </div>
-              ))}
-              <div className="db-chip-divider" />
-              {OPTION_CHIPS.map((chip) => (
+              {FILTER_CHIPS.map((chip) => (
                 <div
                   key={chip}
                   className={`db-chip${activeFilters.has(chip) ? " active" : ""}`}
@@ -652,17 +880,16 @@ export default function Dashboard({ navigate }: Props) {
                     <div className="db-rc-list">
                       {msg.results.map((r) => {
                         const score = r.score ?? 0;
-                        const tags = r.tags ?? [];
-                        const gmailLink = r.id ? `https://mail.google.com/mail/u/0/#inbox/${r.id}` : null;
-                        const acct = r.account ?? "";
+                        const smartLabels = r.smartLabels ?? [];
+                        const isOpen = openEmailId === r.id;
                         return (
-                          <a
+                          <div
                             key={r.id}
-                            className="db-rc"
-                            href={gmailLink ?? "#"}
-                            target={gmailLink ? "_blank" : undefined}
-                            rel="noopener noreferrer"
-                            onClick={gmailLink ? undefined : (e) => e.preventDefault()}
+                            className={`db-rc${isOpen ? " db-rc-open" : ""}`}
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => setOpenEmailId(isOpen ? null : r.id)}
+                            onKeyDown={(e) => e.key === "Enter" && setOpenEmailId(isOpen ? null : r.id)}
                           >
                             <div className="db-rc-top">
                               <span className="db-rc-from">{r.from}</span>
@@ -671,23 +898,18 @@ export default function Dashboard({ navigate }: Props) {
                             <div className="db-rc-subj">{r.subject}</div>
                             <div className="db-rc-snip">{r.snippet}</div>
                             <div className="db-rc-foot">
-                              {tags.map((t, i) => (
-                                <span key={i} className="db-rc-tag" style={{ background: t.bg, color: t.color }}>
-                                  {t.label}
+                              {smartLabels.map((label) => (
+                                <span key={label} className={`db-rc-tag db-label-${label}`}>
+                                  {label}
                                 </span>
                               ))}
-                              {acct && (
-                                <span className="db-rc-acc">
-                                  <span className="db-rc-dot" style={{ background: "#34A853" }} />
-                                  {acct}
-                                </span>
+                              {r.hasAttachment && (
+                                <span className="db-rc-attach">📎</span>
                               )}
                               {score > 0 && <span className="db-rc-score">{score}% match</span>}
-                              {gmailLink && (
-                                <span className="db-rc-gmail-link">Open in Gmail →</span>
-                              )}
+                              <span className="db-rc-open-hint">{isOpen ? "Reading ↑" : "Read →"}</span>
                             </div>
-                          </a>
+                          </div>
                         );
                       })}
                     </div>
@@ -704,21 +926,6 @@ export default function Dashboard({ navigate }: Props) {
                   )}
                   <div className="db-bubble-foot">
                     <span className="db-bubble-ts">{msg.time}</span>
-                    {msg.role === "ai" && (
-                      <button
-                        type="button"
-                        className={`db-star-btn${starredIds.has(msg.id) ? " starred" : ""}`}
-                        onClick={() => toggleStar(msg.id)}
-                        aria-label={starredIds.has(msg.id) ? "Remove bookmark" : "Bookmark this response"}
-                        title={starredIds.has(msg.id) ? "Remove bookmark" : "Bookmark"}
-                      >
-                        <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                          <path d="M8 2l1.5 3.5L13 6l-2.5 2.5.5 3.5L8 10.5 5 12l.5-3.5L3 6l3.5-.5z"
-                            stroke="currentColor" strokeWidth="1.3"
-                            fill={starredIds.has(msg.id) ? "currentColor" : "none"} />
-                        </svg>
-                      </button>
-                    )}
                   </div>
                 </div>
                 {msg.role === "user" && <div className="db-msg-avatar user-av">{userInitials}</div>}
@@ -745,19 +952,12 @@ export default function Dashboard({ navigate }: Props) {
 
           <div className="db-input-bar">
             <div className="db-input-wrap">
-              <button className="db-mic-btn" type="button" aria-label="Voice input (not connected)">
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                  <rect x="5" y="1" width="6" height="9" rx="3" stroke="currentColor" strokeWidth="1.4" />
-                  <path d="M2 8c0 3.3 2.7 6 6 6s6-2.7 6-6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" fill="none" />
-                  <line x1="8" y1="14" x2="8" y2="15" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-                </svg>
-              </button>
               <input
                 type="text"
                 placeholder={
                   canSearch
-                    ? "Ask me to find an email, or ask a follow-up…"
-                    : "Connect Gmail (top right) to search your mail…"
+                    ? "Ask me anything about your emails..."
+                    : "Connect Gmail to search your mail..."
                 }
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
@@ -772,16 +972,201 @@ export default function Dashboard({ navigate }: Props) {
                 </svg>
               </button>
             </div>
-            <div className="db-input-hint">
-              {connected
-                ? activeChip === "All accounts"
-                  ? `mail-sherlock searches across ${accountCount} account${accountCount === 1 ? "" : "s"} · results ranked by semantic similarity`
-                  : `mail-sherlock searches as ${activeChip} · results ranked by semantic similarity`
-                : "Connect an account to search across your indexed mail"}
-            </div>
+            <div className="db-input-hint">results ranked by semantic similarity</div>
           </div>
         </main>
+
+        {/* ── Email Reader Panel ── */}
+        <aside className="db-reader" style={openEmailId ? { width: "360px" } : undefined}>
+          <div className="db-reader-topbar">
+            <button
+              type="button"
+              className="db-reader-close"
+              onClick={() => setOpenEmailId(null)}
+              aria-label="Close email reader"
+            >
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
+                <line x1="1" y1="1" x2="13" y2="13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                <line x1="13" y1="1" x2="1" y2="13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+              </svg>
+            </button>
+            <span className="db-reader-title">Reading email</span>
+          </div>
+
+          {readerLoading ? (
+            <div className="db-reader-loading">
+              <div className="db-reader-spinner" />
+            </div>
+          ) : readerEmail ? (
+            <>
+              <div className="db-reader-header">
+                <div className="db-reader-subject">{readerEmail.subject}</div>
+                <div className="db-reader-meta">
+                  <span className="db-reader-from">{readerEmail.sender}</span>
+                  <span className="db-reader-date">{formatEmailDate(readerEmail.date)}</span>
+                </div>
+                {readerEmail.smartLabels.length > 0 && (
+                  <div className="db-reader-labels">
+                    {readerEmail.smartLabels.map((l) => (
+                      <span key={l} className={`db-rc-tag db-label-${l}`}>{l}</span>
+                    ))}
+                    {readerEmail.isUnread && (
+                      <span className="db-rc-tag db-label-unread">unread</span>
+                    )}
+                  </div>
+                )}
+                {readerEmail.attachments.length > 0 && (
+                  <div className="db-reader-attachments">
+                    {readerEmail.attachments.map((a) => (
+                      <div key={a.filename} className="db-reader-attach">
+                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden>
+                          <rect x="1.5" y="0.5" width="9" height="11" rx="2" stroke="currentColor" strokeWidth="1.2" />
+                          <line x1="3.5" y1="4" x2="8.5" y2="4" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+                          <line x1="3.5" y1="6.5" x2="8.5" y2="6.5" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+                          <line x1="3.5" y1="9" x2="6.5" y2="9" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+                        </svg>
+                        <span className="db-reader-attach-name">{a.filename}</span>
+                        <span className="db-reader-attach-size">{formatBytes(a.size)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="db-reader-body">
+                {readerEmail.bodyHtml ? (
+                  <div
+                    className="db-reader-html"
+                    dangerouslySetInnerHTML={{ __html: readerEmail.bodyHtml }}
+                  />
+                ) : (
+                  <pre className="db-reader-text">{readerEmail.bodyText || readerEmail.snippet}</pre>
+                )}
+              </div>
+            </>
+          ) : openEmailId ? (
+            <div className="db-reader-empty">Could not load email.</div>
+          ) : null}
+        </aside>
       </div>
+
+      {showAddEventModal && (
+        <div className="db-event-modal-overlay" onClick={() => setShowAddEventModal(false)}>
+          <div className="db-event-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="db-event-modal-head">
+              <h3>Add Event</h3>
+              <button type="button" className="db-event-modal-close" onClick={() => setShowAddEventModal(false)}>
+                ×
+              </button>
+            </div>
+            <label className="db-event-field">
+              <span>Title</span>
+              <input value={eventTitle} onChange={(e) => setEventTitle(e.target.value)} placeholder="Event title" />
+            </label>
+            <div className="db-event-row">
+              <label className="db-event-field">
+                <span>Date</span>
+                <input type="date" value={eventDate} onChange={(e) => setEventDate(e.target.value)} />
+              </label>
+              <label className="db-event-field">
+                <span>Time</span>
+                <input type="time" value={eventTime} onChange={(e) => setEventTime(e.target.value)} />
+              </label>
+            </div>
+            <label className="db-event-field">
+              <span>Description</span>
+              <textarea
+                rows={2}
+                value={eventDescription}
+                onChange={(e) => setEventDescription(e.target.value)}
+                placeholder="Optional details"
+              />
+            </label>
+            {eventSaveError && <div className="db-event-error">{eventSaveError}</div>}
+            <div className="db-event-actions">
+              <button type="button" className="db-event-cancel" onClick={() => setShowAddEventModal(false)}>
+                Cancel
+              </button>
+              <button type="button" className="db-event-submit" onClick={handleCreateEvent} disabled={eventSaving}>
+                {eventSaving ? "Saving..." : "Add event"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Switch Account Modal ── */}
+      {switchModalOpen && (
+        <div className="db-modal-overlay" onClick={() => setSwitchModalOpen(false)}>
+          <div className="db-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="db-modal-header">
+              <span className="db-modal-title">Switch Account</span>
+              <button type="button" className="db-modal-close" onClick={() => setSwitchModalOpen(false)}>
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
+                  <line x1="1" y1="1" x2="13" y2="13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                  <line x1="13" y1="1" x2="1" y2="13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                </svg>
+              </button>
+            </div>
+            <div className="db-modal-body">
+              {(accountDetails.length > 0 ? accountDetails : accounts.map((a) => ({ email: a, status: a === activeAccount ? "active" : "cached", emailCount: a === activeAccount ? emailCount : 0, lastSynced: null } as Account))).map((acc) => {
+                const isActive = acc.email === activeAccount;
+                const dotColor = acc.status === "active" ? "#34A853" : acc.status === "needs_login" ? "#A32D2D" : acc.status === "failed" ? "#A32D2D" : "#888888";
+                const lastSyncLabel = acc.lastSynced
+                  ? formatRelativeTime(new Date(acc.lastSynced * 1000))
+                  : null;
+                return (
+                  <div key={acc.email} className={`db-modal-account${isActive ? " active" : ""}`}>
+                    <div className="db-modal-acc-row">
+                      <div className="db-acc-dot" style={{ background: dotColor }} />
+                      <div className="db-modal-acc-info">
+                        <div className="db-modal-acc-email">{acc.email}</div>
+                        <div className="db-modal-acc-meta">
+                          {acc.emailCount > 0 ? `${acc.emailCount.toLocaleString()} emails` : "No emails indexed"}
+                          {lastSyncLabel ? ` · Synced ${lastSyncLabel}` : ""}
+                        </div>
+                      </div>
+                      {isActive && <span className="db-modal-badge">active</span>}
+                    </div>
+                    {isActive ? (
+                      <button
+                        type="button"
+                        className="db-modal-sync-btn"
+                        onClick={() => { setSwitchModalOpen(false); handleSync(); }}
+                        disabled={syncing}
+                      >
+                        <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden>
+                          <path d="M10 6A4 4 0 1 1 6 2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                          <path d="M6 2l2-2M6 2l2 2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                        {syncing ? "Syncing…" : "Sync now"}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="db-modal-switch-to-btn"
+                        onClick={() => handleSwitchAccount(acc.email)}
+                        disabled={switchingTo === acc.email}
+                      >
+                        {switchingTo === acc.email ? "Switching…" : "Switch to this account"}
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+              {switchError && <div className="db-modal-error">{switchError}</div>}
+              <div className="db-modal-divider" />
+              <a href="/auth/login" className="db-modal-add-acc" onClick={() => setSwitchModalOpen(false)}>
+                <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden>
+                  <line x1="6" y1="1" x2="6" y2="11" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                  <line x1="1" y1="6" x2="11" y2="6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                </svg>
+                Connect a new Gmail account
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

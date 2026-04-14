@@ -31,7 +31,7 @@ Your job:
 1. If the query is too vague to search accurately (missing key details that would significantly change results), set needs_clarification=true and write ONE short, specific clarifying question.
    - Only ask when it genuinely matters: e.g. "email from John" (which John?), "find that email" (about what?).
    - Do NOT ask if the user has already given enough context, or if this is a follow-up that builds on history.
-2. Otherwise, extract structured search intent.
+2. Otherwise, extract structured search intent and determine the mode.
 
 Respond ONLY with a single valid JSON object — no markdown, no code fences, no explanation.
 
@@ -39,13 +39,22 @@ Schema:
 {
   "needs_clarification": false,
   "clarifying_question": null,
+  "mode": "<find | answer | summarize | extract | chitchat>",
   "search_query": "<expanded descriptive query for semantic search — resolve pronouns using history>",
   "keywords": ["<verbatim words that must appear: names, order numbers, jargon>"],
   "sender": "<sender name or email if mentioned, else null>",
   "date_hint": "<last_week | last_month | last_year | null>",
   "topic": "<one sentence: what the user is currently looking for>",
-  "search_focus": "<subject | body | sender | any>"
+  "search_focus": "<subject | body | sender | any>",
+  "extract_field": "<deadline | amount | address | phone | date | name | null>"
 }
+
+mode rules:
+- "find"      — user wants to locate emails ("find", "show me", "do I have", "any emails about", "search for")
+- "answer"    — user asks a specific question about email content ("what did X say", "does it mention", "what is the", "did they")
+- "summarize" — user asks for a summary ("summarize", "what's the gist", "give me an overview", "recap", "overview of")
+- "extract"   — user wants a specific data value pulled out ("what's the deadline", "how much", "what date", "what address", "what is the amount")
+- "chitchat"  — not a search intent at all ("thanks", "hi", "hello", "what can you do", "help", general non-email questions)
 
 search_focus rules:
 - "subject" — query is about email topics/categories ("find emails about X", "emails titled Y")
@@ -53,7 +62,10 @@ search_focus rules:
 - "sender"  — query is primarily about who sent emails ("emails from HR")
 - "any"     — unclear, or the query spans multiple fields
 
-When needs_clarification=true, set clarifying_question to the question and leave search_query/keywords/sender/date_hint/search_focus as empty/null — the search will not run until the user replies."""
+extract_field: only set when mode="extract". Identify the specific data type to extract.
+
+When needs_clarification=true, set clarifying_question to the question and leave other fields as empty/null — the search will not run until the user replies.
+When mode="chitchat", leave search_query/keywords/sender/date_hint as empty/null — no search is needed."""
 
 # ── Re-ranking ─────────────────────────────────────────────────────────────────
 
@@ -236,9 +248,12 @@ def _fallback(user_query: str) -> dict:
     return {
         "needs_clarification": False,
         "clarifying_question": None,
+        "mode": "find",
         "search_query": user_query,
         "keywords": [],
         "sender": None,
         "date_hint": None,
         "topic": user_query,
+        "search_focus": "any",
+        "extract_field": None,
     }
