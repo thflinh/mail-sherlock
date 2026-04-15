@@ -23,11 +23,11 @@ import hashlib
 import logging
 import secrets
 import time
-from datetime import datetime, timezone
+import threading
+from datetime import datetime, timedelta, timezone
 from pymongo import UpdateOne
 from pymongo.errors import PyMongoError
-
-logger = logging.getLogger(__name__)
+from rank_bm25 import BM25Okapi
 
 from db import connect_db, close_db, get_db
 from embeddings import (
@@ -43,6 +43,8 @@ from agent_search import understand_query, rerank
 from agent import find as agent_find, answer as agent_answer, summarize as agent_summarize, extract as agent_extract, chitchat as agent_chitchat
 from reader import get_email_for_reader
 from labels import assign_labels_bulk
+
+logger = logging.getLogger(__name__)
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 CREDENTIALS_FILE = Path(__file__).parent / "credentials.json"  # local dev fallback
@@ -818,7 +820,6 @@ async def _semantic_search(query_text: str, top_k: int = 5, history: list[dict] 
 
         # Filter by date if Gemini extracted a time range
         if date_hint:
-            from datetime import datetime, timedelta, timezone
             from email.utils import parsedate_to_datetime
             now = datetime.now(timezone.utc)
             delta = {"last_week": timedelta(days=7), "last_month": timedelta(days=30), "last_year": timedelta(days=365)}.get(date_hint)
@@ -867,7 +868,6 @@ async def _semantic_search(query_text: str, top_k: int = 5, history: list[dict] 
         # ── BM25 hybrid scoring ──────────────────────────────────────────────
         # Semantic search misses exact matches (order numbers, names, IDs).
         # BM25 covers those gaps; blend 70% semantic + 30% keyword.
-        from rank_bm25 import BM25Okapi
         tokenized_corpus = [
             (e.get("subject", "") + " " + e.get("body", "")).lower().split()
             for e in candidates
@@ -1162,7 +1162,6 @@ async def _sync_account_bulk(db, account_email: str, creds: Credentials, max_res
     # Each worker thread gets its own service instance (googleapiclient is not
     # thread-safe for shared use), but we avoid the discovery-document HTTP fetch
     # on every call by reusing the instance within the same thread.
-    import threading
     _tls = threading.local()
 
     def _get_svc():
@@ -1288,9 +1287,6 @@ async def sync_emails():
 @app.post("/emails/seed")
 async def seed_emails():
     """Load mock emails into MongoDB (run once to populate)."""
-    import json
-    from pathlib import Path
-
     db = get_db()
     path = Path(__file__).parent / "emails.json"
     emails = json.loads(path.read_text())
