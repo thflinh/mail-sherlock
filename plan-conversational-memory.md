@@ -1,269 +1,157 @@
-# Plan: Conversational Memory
+# Plan: Conversational Email QA (Updated)
 
-## Current State (what's already done)
+## Goal
 
-The infrastructure is mostly in place. Here's the exact status:
+Make chat behave like a real assistant: read email content, answer questions conversationally, and keep context across turns.
 
-| Component | Status | Notes |
+## Status Snapshot
+
+### Phase 1: History-aware generation (Completed)
+
+| Item | Status | Notes |
 |---|---|---|
-| `ChatRequest` has `messages` field | Done | Frontend already sends full message history |
-| `/chat` extracts `history` from messages | Done | `main.py:923` |
-| `understand_query()` accepts `history` | Done | `agent_search.py:86` — Gemini already uses history to resolve pronouns in search |
-| `find()` accepts `conversation=` | Done | `agent.py:72` — parameter exists |
-| `answer()` accepts `conversation=` | Done | `agent.py:131` — parameter exists |
-| `chitchat()` accepts `conversation=` | Done | `agent.py:227` — parameter exists |
-| **`_call()` uses conversation history** | **NOT done** | `_call()` only takes `system` and `user` strings — history is silently dropped |
-| **`summarize()` accepts `conversation=`** | **NOT done** | No parameter, no history support |
-| **`extract()` accepts `conversation=`** | **NOT done** | No parameter, no history support |
-| **History truncation** | **NOT done** | Long conversations will eventually overflow token limit |
+| `/chat` receives full `messages` history | Done | `backend/main.py` |
+| Intent parsing uses history | Done | `understand_query(..., history=...)` |
+| Gemini `_call()` accepts and uses history | Done | `backend/agent.py` |
+| History trimming added | Done | `_MAX_HISTORY_TURNS = 10`, `_trim_history()` |
+| `find/answer/chitchat` pass conversation to `_call()` | Done | `backend/agent.py` |
+| `summarize/extract` accept conversation and pass to `_call()` | Done | `backend/agent.py` |
+| `/chat` passes history to summarize/extract handlers | Done | `backend/main.py` |
+| Rerank uses expanded `search_q` (not raw `q`) | Done | `backend/main.py` |
 
-### The Core Bug
+Result: the model now sees prior turns and can produce contextual answers from email body/snippet content.
 
-The `conversation` parameter is passed into `find()`, `answer()`, `chitchat()` — but those functions call `_call(system, user)` which throws the history away. The LLM never sees prior turns.
+## Remaining Gap (What still prevents ChatGPT-like continuity)
 
-```python
-# agent.py:145 — conversation is received but never passed to _call()
-def answer(question, email, conversation=None):
-    ...
-    reply_text = _call(_ANSWER_SYSTEM, user_prompt)  # ← history lost here
+History alone is not enough for references like:
+- "What about the first one?"
+- "Did they mention a deadline in that email?"
+- "Compare the second and third results"
+
+Current behavior re-runs search every turn and may select a different top email. We need persistent conversation state that tracks which emails the user is referring to.
+
+## Phase 2: Deterministic Conversation Context (Next)
+
+### Design
+
+Add a lightweight context object returned by `/chat` and echoed back by the client on each request. The server is fully stateless — the client owns the context.
+
+```json
+{
+  "context": {
+    "result_ids": ["id1", "id2", "id3"],
+    "active_email_id": "id1",
+    "mode": "find"
+  }
+}
 ```
 
----
+> `updated_at` removed — expiry is not needed since context is reset on any new search intent. The client always holds the latest version.
 
-## What Needs to Change
+#### Resolution priority (highest to lowest)
 
-### File 1: `backend/agent.py` — 4 changes
+1. `active_email_id` from reader (user opened a specific email) — always wins
+2. `context_ref` resolved from `context.result_ids` (e.g. "the first one" → index 0)
+3. Fresh top search hit — fallback when no context reference exists
 
-#### Change 1: Update `_call()` to support multi-turn history
+#### Context lifecycle rules
 
-`_call()` currently takes a plain string for user input. It needs a new optional `history` parameter that formats prior turns in Gemini's multi-turn format.
+| Trigger | Action |
+|---|---|
+| Mode is `find` and `uses_prior_context: false` | Replace `result_ids` with new results, set `active_email_id` to first |
+| Mode is `answer/extract` and `uses_prior_context: true` | Resolve email from `context.result_ids` using `context_ref`, skip new search |
+| Mode is `answer/extract` and `uses_prior_context: false` | Run fresh search, update context |
+| Filters, account, or `top_k` change materially | Treat as new search, reset context |
 
-**Current `_call()` signature:**
-```python
-def _call(system: str, user: str, max_tokens: int = 1024) -> str:
+### Linchpin: extend `understand_query()` first
+
+All downstream resolution depends on two new fields in the intent JSON returned by `understand_query()` in `agent_search.py`:
+
+```json
+{
+  "uses_prior_context": true,
+  "context_ref": "first"
+}
 ```
 
-**New `_call()` signature:**
-```python
-def _call(
-    system: str,
-    user: str,
-    max_tokens: int = 1024,
-    history: list[dict] | None = None,   # ← ADD THIS
-) -> str:
-```
+- `uses_prior_context`: `true` when the query references prior results rather than starting a new search. Examples: "the first one", "that email", "what about the second?", "did it mention a deadline?"
+- `context_ref`: which result to target — one of `"first"`, `"second"`, `"third"`, `"last"`, `"active"`, or `null` (means "same as before / top result").
 
-**How Gemini's multi-turn format works:**
-```python
-contents = [
-    {"role": "user",  "parts": [{"text": "What did my landlord say?"}]},
-    {"role": "model", "parts": [{"text": "Your landlord said rent increases by $150..."}]},
-    {"role": "user",  "parts": [{"text": "When does that start?"}]},  # ← current turn
-]
-```
+Add these two fields to `_UNDERSTAND_SYSTEM` prompt in `agent_search.py` and to the `_fallback()` return dict.
 
-Inside `_call()`, build the `contents` list from history + current message:
-```python
-contents = []
-if history:
-    for turn in history:
-        role = "user" if turn.get("role") == "user" else "model"
-        contents.append({"role": role, "parts": [{"text": turn["content"]}]})
-contents.append({"role": "user", "parts": [{"text": user}]})
-```
+#### Why `understand_query()` — not a regex helper
 
-Then pass `contents` (not the bare string) to `generate_content()`.
+A regex on "first/1st/second..." handles simple ordinals but breaks on:
+- "the most recent one" → needs date-awareness
+- "the one from yesterday" → needs date reference
+- "that AWS email" → anaphora, not ordinal
+- "compare the second and third" → multi-reference
 
----
+Gemini already parses intent from full conversation history — adding two fields costs nothing extra and handles all of these cases naturally.
 
-#### Change 2: Add history truncation helper
+### File Changes
 
-Long conversations will eventually exceed Gemini's token limit. Add a helper at the top of `agent.py`:
+1. `backend/agent_search.py`
+   - Add `uses_prior_context` and `context_ref` to `_UNDERSTAND_SYSTEM` prompt schema
+   - Add both fields to `_fallback()` return dict (default: `false` / `null`)
 
-```python
-_MAX_HISTORY_TURNS = 10  # Keep last 10 turns (5 user + 5 assistant)
+2. `backend/main.py`
+   - Extend `ChatRequest` with optional `context: ConversationContext | None`
+   - Add `ConversationContext` Pydantic model: `result_ids`, `active_email_id`, `mode`
+   - In `answer/extract` handlers: if `uses_prior_context` is true, resolve target email from `context.result_ids[context_ref_index]` instead of running a fresh search
+   - On `find` with `uses_prior_context: false`: build and return new context from results
+   - Include `context` in every `/chat` response
 
-def _trim_history(history: list[dict] | None) -> list[dict] | None:
-    if not history:
-        return history
-    return history[-_MAX_HISTORY_TURNS:] if len(history) > _MAX_HISTORY_TURNS else history
-```
+3. `extension/src/api/search.ts`
+   - Add `ConversationContext` interface
+   - Add optional `context` to `ChatRequest` payload type
+   - Add `context` to `ChatResponse` type
 
----
+4. `extension/src/panel/PanelApp.tsx`
+   - Add `conversationContext` state (initially `null`)
+   - Send current `conversationContext` with every `chatSearch()` call
+   - Update `conversationContext` from each response
 
-#### Change 3: Thread history through `find()`, `answer()`, `chitchat()`
+## Acceptance Tests
 
-These already accept `conversation=` but don't use it. Pass it to `_call()`:
+1. **Context carry-over**
+   - User: "Find emails from landlord about rent."
+   - User: "What did the first one say about start date?"
+   - Expected: `understand_query()` returns `uses_prior_context: true, context_ref: "first"` → answers from `result_ids[0]` email body, no new search.
 
-```python
-# find() — add to _call():
-reply_text = _call(_FIND_SYSTEM, user_prompt, max_tokens=512, history=_trim_history(conversation))
+2. **Ordinal switch**
+   - User: "What about the second one?"
+   - Expected: `context_ref: "second"` → switches target to `result_ids[1]`.
 
-# answer() — add to _call():
-reply_text = _call(_ANSWER_SYSTEM, user_prompt, max_tokens=512, history=_trim_history(conversation))
+3. **Non-ordinal reference**
+   - User: "The one from yesterday — what did it say about the deadline?"
+   - Expected: `uses_prior_context: true, context_ref: null` → resolves to most date-relevant email in `result_ids`, Gemini picks it.
 
-# chitchat() — add to _call():
-reply_text = _call(_CHITCHAT_SYSTEM, message, max_tokens=256, history=_trim_history(conversation))
-```
+4. **Active reader override**
+   - Open email in reader, ask: "Does this mention late fee?"
+   - Expected: `active_email_id` from reader wins regardless of `context_ref` or search results.
 
----
+5. **New search reset**
+   - User: "Now find AWS billing emails."
+   - Expected: `understand_query()` returns `uses_prior_context: false` → fresh search runs, `context.result_ids` replaced with AWS results, old context discarded.
 
-#### Change 4: Add `conversation=` to `summarize()` and `extract()`
+## Risks and Mitigations
 
-These two modes currently have no history support at all.
+| Risk | Mitigation |
+|---|---|
+| Context gets stale after account/filter changes | Clear context when filters/account/top_k change materially |
+| Ambiguous pronouns ("that one") | Ask a clarification question when no safe resolution exists |
+| Extra payload size | Keep only IDs and minimal metadata in `context` |
 
-**`summarize()` — add parameter and pass to `_call()`:**
-```python
-def summarize(
-    emails: list[dict],
-    user_request: str,
-    conversation: list[dict] | None = None,   # ← ADD
-) -> AgentResponse:
-    ...
-    reply_text = _call(_SUMMARIZE_SYSTEM, user_prompt, max_tokens=768, history=_trim_history(conversation))
-```
+## Delivery Order
 
-**`extract()` — add parameter and pass to `_call()`:**
-```python
-def extract(
-    extract_field: str,
-    email: dict,
-    conversation: list[dict] | None = None,   # ← ADD
-) -> AgentResponse:
-    ...
-    reply_text = _call(_EXTRACT_SYSTEM, user_prompt, max_tokens=256, history=_trim_history(conversation))
-```
-
----
-
-### File 2: `backend/main.py` — 2 changes
-
-The `/chat` endpoint already builds `history`. It just isn't passed to `summarize` and `extract` calls.
-
-#### Change 5: Pass history to `agent_summarize()`
-
-**Current (`main.py:981`):**
-```python
-resp = agent_summarize(emails_to_summarize, query_text)
-```
-
-**New:**
-```python
-resp = agent_summarize(emails_to_summarize, query_text, conversation=history)
-```
-
----
-
-#### Change 6: Pass history to `agent_extract()`
-
-**Current (`main.py:1002`):**
-```python
-resp = agent_extract(extract_field, email_doc)
-```
-
-**New:**
-```python
-resp = agent_extract(extract_field, email_doc, conversation=history)
-```
-
----
-
-## Implementation Order
-
-Do these in order — each step is independently testable.
-
-### Step 1 — Update `_call()` in `agent.py`
-- Add `history` parameter
-- Build multi-turn `contents` list
-- Pass `contents` to `generate_content()`
-- Add `_trim_history()` helper
-
-**Test:** Call `_call()` directly in a Python shell with a fake 2-turn history. Verify the Gemini response references the prior turn.
-
----
-
-### Step 2 — Wire history into `find()`, `answer()`, `chitchat()`
-- Pass `history=_trim_history(conversation)` to `_call()` in all three functions
-
-**Test:** 
-```
-Turn 1: "Find emails about my lease"        → shows lease emails
-Turn 2: "When did the first one arrive?"    → should answer without re-searching
-Turn 3: "Who sent it?"                      → should still reference the same email
-```
-
----
-
-### Step 3 — Add `conversation=` to `summarize()` and `extract()`
-- Add parameter signature
-- Pass to `_call()`
-
-**Test:**
-```
-Turn 1: "Summarize emails about AWS"        → summary with 3 emails
-Turn 2: "What was the total amount?"        → extract from those same emails
-```
-
----
-
-### Step 4 — Update `main.py` calls
-- Add `conversation=history` to both `agent_summarize()` and `agent_extract()` calls
-
-**Test:** Full end-to-end chat in the extension popup.
-
----
-
-## What a Good Conversation Looks Like After This
-
-```
-User:      "Find emails from my landlord about rent"
-Sherlock:  "I found 2 emails. The most recent is from Nov 15 — your landlord
-            confirmed a rent increase starting January."
-            [shows email cards]
-
-User:      "How much is the increase?"       ← follow-up, no re-search needed
-Sherlock:  "The November 15 email states the rent will increase by $150/month,
-            from $1,800 to $1,950, effective January 1st."
-
-User:      "Did they give a reason?"         ← still referring to same email
-Sherlock:  "Yes — the email cites rising property tax assessments and
-            maintenance cost increases as the reason."
-
-User:      "What about the earlier email?"   ← switches context
-Sherlock:  "The earlier email from August 3rd mentioned a potential increase
-            was being considered, but no amount was confirmed at that time."
-```
-
----
-
-## What Doesn't Change
-
-- No frontend changes needed — the extension already sends `messages` array
-- No schema changes — `ChatRequest` and `AgentResponse` are unchanged
-- No new dependencies — all changes are inside existing files
-- The `/ask` endpoint is untouched (it bypasses the chat pipeline entirely)
-- `understand_query()` already uses history for search — no change needed there
-
----
-
-## Risk & Mitigation
-
-| Risk | Likelihood | Mitigation |
-|---|---|---|
-| Token overflow on long conversations | Low | `_trim_history()` caps at 10 turns |
-| History confuses mode-switching | Low | `understand_query()` already handles this — Gemini sees history and interprets mode changes correctly |
-| Gemini API latency increase | Very Low | History adds ~500–2000 extra tokens; Gemini 2.5-flash handles this in <100ms extra |
-| `_call()` breaking existing behavior | None | `history=None` is default — all existing callers that don't pass history are unaffected |
-
----
+1. **Extend `understand_query()`** — add `uses_prior_context` and `context_ref` to prompt schema and `_fallback()` in `agent_search.py`. Test in isolation by calling it with a fake 2-turn history.
+2. **Backend context schema + response plumbing** — add `ConversationContext` Pydantic model, extend `ChatRequest`, include `context` in `/chat` response.
+3. **Backend reference resolver** — in `answer/extract` handlers, resolve email from `context.result_ids` when `uses_prior_context` is true. Add context-reset logic on fresh searches.
+4. **Frontend wiring** — add `context` to request/response types in `search.ts`, store and send in `PanelApp.tsx`.
+5. **End-to-end tests** — run all 5 acceptance tests in the extension popup.
 
 ## Summary
 
-| | |
-|---|---|
-| **Files to change** | `backend/agent.py`, `backend/main.py` |
-| **Lines added** | ~30 lines total |
-| **Lines changed** | ~10 lines total |
-| **New dependencies** | None |
-| **Estimated time** | 1–2 hours |
-| **Breaking changes** | None |
+Phase 1 is done and already improves conversational behavior.  
+Phase 2 is the key step to make follow-up references reliable and truly ChatGPT-like.
