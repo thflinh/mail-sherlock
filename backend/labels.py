@@ -91,13 +91,14 @@ def _gemini_classify(email: dict) -> list[str]:
                 "system_instruction": _CLASSIFY_SYSTEM,
             },
         )
-        import json, re
+        import json
+        import re
         text = (resp.text or "").strip()
         text = re.sub(r"^```(?:json)?\s*", "", text)
         text = re.sub(r"\s*```$", "", text)
         result = json.loads(text)
         if isinstance(result, list):
-            return [l for l in result if l in _GEMINI_LABELS]
+            return [label for label in result if label in _GEMINI_LABELS]
     except Exception as exc:
         logger.debug("Gemini classify failed (%s)", exc)
     return []

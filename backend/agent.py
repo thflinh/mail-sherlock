@@ -94,7 +94,8 @@ def find(
         parts = reply_text.split("RANKED:")
         intro = parts[0].strip()
         try:
-            import json, re
+            import json
+            import re
             raw = re.search(r"\[[\d,\s]+\]", parts[1])
             if raw:
                 order = json.loads(raw.group())

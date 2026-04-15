@@ -174,7 +174,7 @@ def rerank(user_query: str, candidates: list[dict], top_k: int = 5) -> list[dict
     prompt = (
         f'Search query: "{user_query}"\n\n'
         f"Candidates:\n" + "\n".join(summaries) + "\n\n"
-        f"Return a JSON array of the IDs ranked from most to least relevant. Example: [2, 0, 4, 1, 3]"
+        "Return a JSON array of the IDs ranked from most to least relevant. Example: [2, 0, 4, 1, 3]"
     )
 
     try:
