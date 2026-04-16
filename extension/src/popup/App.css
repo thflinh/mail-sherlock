@@ -449,6 +449,17 @@ a.result-card--link:focus-visible {
   font-size: 0.75rem;
 }
 
+/* Clarification question from the agent */
+.chat-block--clarification .assistant-label {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid #c5c3f8;
+  border-radius: 10px;
+  padding: 0.45rem 0.65rem;
+  font-weight: 500;
+  font-size: 0.78rem;
+}
+
 /* Follow-up action buttons shown after last assistant result */
 .follow-up-actions {
   display: flex;

@@ -64,6 +64,8 @@ export interface ChatApiMessage {
 
 export interface ChatResponse extends SearchResponse {
   reply: string;
+  /** Set when Gemini needs more details before searching. */
+  clarification?: string | null;
 }
 
 async function errorMessageFromResponse(res: Response): Promise<string> {

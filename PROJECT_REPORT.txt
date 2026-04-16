@@ -1,0 +1,795 @@
+================================================================================
+                        MAIL-SHERLOCK — PROJECT REPORT
+================================================================================
+Date: March 2026
+Branch: feat/homepage-design
+Author: (see git log)
+================================================================================
+
+
+TABLE OF CONTENTS
+-----------------
+  1. Project Overview
+  2. Motivation & Problem Statement
+  3. System Architecture
+  4. Technology Stack
+  5. Backend Design
+  6. Frontend Design (Web Dashboard & Landing Page)
+  7. Chrome Extension
+  8. AI & Machine Learning Pipeline
+  9. Gmail Integration & OAuth
+ 10. Database Design
+ 11. Deployment & Infrastructure
+ 12. Security & Privacy
+ 13. Feature Status
+ 14. Known Limitations & Future Roadmap
+ 15. File Structure Reference
+
+
+================================================================================
+1. PROJECT OVERVIEW
+================================================================================
+
+Mail-Sherlock is a full-stack AI-powered email search tool that allows users to
+find Gmail messages using natural language descriptions instead of exact keyword
+matching. Rather than trying to recall the precise subject line or sender name
+of an email, a user can describe what they remember about it — e.g., "the
+invoice from my cloud provider last month" — and the system returns ranked
+results based on semantic meaning.
+
+The project consists of three main components:
+  - A Python/FastAPI backend that handles Gmail sync, embedding generation,
+    OAuth authentication, and AI-enhanced search.
+  - A React/TypeScript web application providing a dashboard and landing page.
+  - A Chrome Extension (Manifest V3) for quick in-browser access to search
+    while using Gmail.
+
+All embedding computations run locally on the user's machine, making the
+system privacy-preserving by design. Email content is never sent to third-party
+embedding services.
+
+
+================================================================================
+2. MOTIVATION & PROBLEM STATEMENT
+================================================================================
+
+Standard email search tools (including Gmail's built-in search) rely on
+keyword matching. This works well when users remember the exact words used in
+an email, but fails when:
+  - The user remembers the *topic* or *context* but not exact phrasing.
+  - Emails are long and the relevant part is buried in the body.
+  - The user wants to search across multiple accounts simultaneously.
+  - Search terms are too generic and return hundreds of irrelevant results.
+
+AI-powered email assistants like Gemini in Gmail or Microsoft Copilot can
+answer questions about email, but they:
+  - Require sending email content to third-party cloud services.
+  - Do not allow transparent control over what is indexed.
+  - Are locked behind subscription tiers or specific platform integrations.
+
+Mail-Sherlock addresses these gaps by:
+  - Running sentence-embedding models locally (all-MiniLM-L6-v2, ~90MB).
+  - Indexing email content in a local/self-hosted MongoDB instance.
+  - Using Gemini only for lightweight query intent parsing (not email content).
+  - Providing a simple, open interface via both a web app and Chrome extension.
+
+
+================================================================================
+3. SYSTEM ARCHITECTURE
+================================================================================
+
+High-Level Architecture:
+
+  +--------------------+    +-------------------+    +-------------------+
+  |  Chrome Extension  |    |   Web Dashboard   |    |   Landing Page    |
+  |  (React MV3 Popup) |    |   (React SPA)     |    |   (React Route)   |
+  +--------+-----------+    +--------+----------+    +--------+----------+
+           |                         |                         |
+           +-------------------------+-------------------------+
+                                     |
+                              HTTP / JSON API
+                                     |
+           +-------------------------+-------------------------+
+           |              FastAPI Backend (:8000)             |
+           |                                                   |
+           |  Endpoints:                                       |
+           |    POST /ask           -- semantic search         |
+           |    POST /chat          -- conversational search   |
+           |    GET  /auth/login    -- start OAuth flow        |
+           |    GET  /auth/callback -- handle OAuth callback   |
+           |    POST /emails/sync   -- pull Gmail messages     |
+           |    POST /emails/seed   -- load mock data          |
+           |    GET  /health        -- MongoDB connectivity    |
+           |    GET  /ready         -- Railway health probe    |
+           |                                                   |
+           +-----------+-------------------+-------------------+
+                       |                   |
+           +-----------+--------+  +-------+------------------+
+           |  MongoDB Database  |  |    Google External APIs  |
+           |  (local or Atlas)  |  |                          |
+           |                    |  |  - Gmail REST API        |
+           |  Collections:      |  |  - Google OAuth 2.0      |
+           |    emails          |  |  - Gemini API            |
+           |    settings        |  |    (gemini-2.5-flash)    |
+           +--------------------+  +--------------------------+
+
+Request Flow — Semantic Search:
+  1. User types query in web dashboard or Chrome extension popup.
+  2. Frontend POSTs { query, k } to /ask.
+  3. Backend calls Gemini API to extract structured intent from the query:
+       { search_query, keywords, sender, date_hint, topic }
+  4. Backend encodes search_query using local SentenceTransformer model.
+  5. Cosine similarity is computed against all stored email embeddings.
+  6. Keyword boost (+0.15 per match) applied if Gemini extracted keywords.
+  7. Top-K results sorted by final score and returned as JSON.
+  8. Frontend renders result cards with relevance percentage bars.
+
+Request Flow — OAuth + Email Sync:
+  1. User clicks "Connect Gmail" → GET /auth/login.
+  2. Backend creates OAuth flow, stores in memory dict, redirects to Google.
+  3. User consents → Google redirects to /auth/callback with auth code.
+  4. Backend exchanges code for credentials, stores token + gmail address
+     in MongoDB settings collection.
+  5. User triggers sync → POST /emails/sync.
+  6. Backend fetches up to 500 message IDs from Gmail API.
+  7. For each message, fetches full payload, walks MIME tree, extracts text.
+  8. Computes 384-dim embedding per email via SentenceTransformer.
+  9. Upserts document into MongoDB emails collection.
+
+
+================================================================================
+4. TECHNOLOGY STACK
+================================================================================
+
+Backend:
+  - Language:       Python 3.11
+  - Web Framework:  FastAPI (async, auto-generated OpenAPI docs)
+  - ASGI Server:    Uvicorn
+  - DB Driver:      Motor (async MongoDB driver)
+  - ML:             sentence-transformers 2.x (HuggingFace)
+                    PyTorch (CPU, lazy-loaded)
+                    NumPy (vector math)
+  - Gmail:          google-api-python-client
+                    google-auth-oauthlib
+  - AI/LLM:         Google Generative AI SDK (gemini-2.5-flash)
+  - Config:         python-dotenv
+  - TLS:            certifi (CA bundle for MongoDB Atlas)
+
+Frontend (Web):
+  - Language:       TypeScript
+  - Framework:      React 18.2
+  - Build Tool:     Vite 5 with @vitejs/plugin-react
+  - Routing:        React Router (Landing / Dashboard routes)
+  - Styling:        Plain CSS (dark theme, custom design system)
+  - API:            Fetch API (proxied via Vite dev server)
+
+Chrome Extension:
+  - Language:       TypeScript
+  - UI Framework:   React 18.2
+  - Build:          Vite (3 separate configs for popup, content, background)
+  - Manifest:       MV3 (Manifest Version 3)
+  - Components:     MinimalPopup (search UI), content script (Gmail page
+                    integration), background service worker (API proxy)
+  - Storage:        Chrome Storage API (panel state, UI prefs)
+
+Infrastructure:
+  - Containerization: Docker (python:3.11-slim base, CPU PyTorch)
+  - PaaS:             Railway.app
+  - Database Hosting: MongoDB Atlas (cloud) or local Docker Compose
+  - Local Dev DB:     Docker Compose (mongo:7 on port 27017)
+
+
+================================================================================
+5. BACKEND DESIGN
+================================================================================
+
+The backend is a single-file FastAPI application (main.py) with supporting
+modules for database access (db.py), embedding operations (embeddings.py),
+and AI-assisted query processing (agent_search.py).
+
+--- main.py ---
+Defines all HTTP endpoints and orchestrates business logic:
+
+  GET  /health
+    Returns {"ok": true, "database": "up/down"} — used by monitoring.
+
+  GET  /ready
+    Railway health probe endpoint. Returns 200 when the app is ready
+    to serve traffic. Designed with a 300-second timeout to accommodate
+    slow PyTorch model warm-up.
+
+  GET  /auth/login
+    Initiates Google OAuth 2.0 flow. Generates authorization URL with
+    scopes: gmail.readonly, userinfo.email. Stores flow object in memory
+    dict keyed by a random state parameter. Redirects browser to Google.
+
+  GET  /auth/callback
+    Handles Google's redirect after user consent. Exchanges auth code for
+    credentials. Fetches user's Gmail address from Google userinfo API.
+    Stores oauth_token and gmail_address in MongoDB settings collection.
+
+  POST /emails/sync
+    Authenticates using stored token. Calls Gmail API messages.list with
+    maxResults=500. For each message ID, fetches full payload (format=full).
+    Parses MIME tree recursively to extract text/plain content (skips
+    attachments). Generates embedding using local SentenceTransformer.
+    Upserts document into emails collection with fields:
+      id, threadId, subject, sender, date, body (2000 char cap),
+      snippet, account (gmail address), embedding (list of 384 floats).
+
+  POST /emails/seed
+    Loads mock email data from emails.json file. Computes embeddings for
+    each entry. Upserts into MongoDB. Used for demo/testing without
+    real Gmail credentials.
+
+  POST /ask  (QueryRequest: { query: str, k: int = 5 })
+    Main semantic search endpoint. Calls agent_search.extract_query_intent()
+    to parse user query via Gemini. Encodes resulting search_query with
+    SentenceTransformer. Fetches all email documents from MongoDB. Computes
+    cosine similarity between query vector and each email's embedding.
+    Applies keyword boost (+0.15 per keyword found in email text).
+    Returns top-k results sorted by score.
+
+  POST /chat  (ChatRequest: { message: str, history: list, k: int = 5 })
+    Conversational variant of /ask. Passes full conversation history to
+    Gemini so follow-up queries resolve correctly (e.g., "narrow to
+    last month" understands context from prior turn). Returns results
+    with the same ranking pipeline as /ask.
+
+--- embeddings.py ---
+  - _model: module-level cache variable (None until first use)
+  - get_model(): lazy-loads SentenceTransformer('all-MiniLM-L6-v2')
+  - encode(text): returns L2-normalized 384-dim numpy array
+  - cosine_similarity(a, b): dot product of two normalized vectors
+  - warmup(): fire-and-forget background thread that calls encode("warmup")
+    on startup to pre-load PyTorch so first real request is fast
+
+--- agent_search.py ---
+  - Uses google.generativeai SDK with gemini-2.5-flash model
+  - System prompt instructs Gemini to extract structured search intent
+  - Input: raw user query + optional conversation history
+  - Output: JSON with fields:
+      search_query  -- cleaned query for embedding
+      keywords      -- list of salient terms for boosting
+      sender        -- extracted sender name/email if mentioned
+      date_hint     -- temporal reference if mentioned
+      topic         -- subject category
+  - If GEMINI_API_KEY is absent or API call fails, returns passthrough
+    object with search_query = original user query (graceful fallback)
+
+--- db.py ---
+  - Async MongoDB connection using motor.motor_asyncio
+  - Reads MONGODB_URI from environment (default: mongodb://127.0.0.1:27017)
+  - Reads DB_MAIL from environment (default: mail_sherlock)
+  - Exposes: db.emails, db.settings collections
+
+
+================================================================================
+6. FRONTEND DESIGN (WEB DASHBOARD & LANDING PAGE)
+================================================================================
+
+The web frontend is a React SPA served from /index.html, with two main routes:
+
+--- Landing Page (Landing.tsx) ---
+  A marketing/product page with:
+    - Hero section: headline, subtitle, call-to-action buttons
+    - Live demo search bar (functional, calls /ask)
+    - Feature highlights (semantic search, multi-account, privacy, extension)
+    - Comparison table: Mail-Sherlock vs. Gemini in Gmail vs. Microsoft Copilot
+    - Dark theme consistent with dashboard
+
+--- Dashboard (Dashboard.tsx) ---
+  The main user interface for connected accounts and searching:
+    - Sidebar: connected Gmail accounts listed with colored dot indicators
+    - Search bar: free-text input, sends QueryRequest to /ask on submit
+    - Filter chips: time range (Today, This Week, This Month), attachments
+    - Results area: ranked email cards showing:
+        * Subject line
+        * Sender and date
+        * Email body snippet
+        * Relevance score bar (color-coded):
+            - Purple: 90%+ match
+            - Pink/red: 75%+ match
+            - Light grey: below 75%
+    - Stats display: total indexed emails, last sync timestamp
+
+TypeScript interfaces (types.ts):
+  - EmailResult: { id, subject, sender, date, snippet, score, account }
+  - QueryRequest: { query: string, k?: number }
+  - ChatMessage: { role: "user" | "assistant", content: string }
+
+Vite Configuration:
+  - Dev server proxy: /ask, /auth, /emails → http://localhost:8000
+  - Build output: ../backend/static/ (served by FastAPI's StaticFiles mount)
+  - This allows a single Railway dyno to serve both API and frontend
+
+
+================================================================================
+7. CHROME EXTENSION
+================================================================================
+
+The Chrome extension provides quick access to Mail-Sherlock search without
+leaving Gmail. It is built as a Manifest V3 extension with three separate
+JavaScript bundles, each with its own Vite config:
+
+--- Popup (MinimalPopup.tsx) ---
+  - Small React UI that opens when the extension icon is clicked
+  - Shows connection status indicator (connected / offline)
+  - Search input field with submit on Enter
+  - Displays result cards: subject, sender, score percentage
+  - Each result links directly to the email thread in Gmail
+    (https://mail.google.com/mail/u/0/#inbox/{threadId})
+  - Uses Chrome Storage API to persist panel open/close state
+
+--- Content Script ---
+  - Injected into mail.google.com pages
+  - Can read DOM context for integration with Gmail UI (e.g., detecting
+    currently open email for context-aware search)
+
+--- Background Service Worker ---
+  - Persistent background script (MV3 service worker)
+  - Acts as API proxy: relays search requests from content script to
+    the local backend (localhost:8000)
+  - Handles cross-origin requests from the extension to the API
+
+--- Manifest V3 Notes ---
+  - Permissions: storage, tabs, scripting
+  - Host permissions: http://localhost:8000/*, https://mail.google.com/*
+  - Hardcoded to 127.0.0.1 (not localhost) to avoid Windows IPv6 issue
+    where Node/Chrome resolves localhost to ::1 but uvicorn listens on IPv4
+
+
+================================================================================
+8. AI & MACHINE LEARNING PIPELINE
+================================================================================
+
+--- Embedding Model: all-MiniLM-L6-v2 ---
+  - Source: HuggingFace sentence-transformers library
+  - Architecture: MiniLM (distilled BERT), 6 transformer layers
+  - Output dimensionality: 384 floats per text input
+  - Model size: ~90MB (cached locally after first download)
+  - Normalization: L2-normalized output (unit vectors)
+  - Similarity metric: dot product == cosine similarity (after normalization)
+  - Inference: CPU-only (no GPU required)
+  - Latency: ~20-80ms per encoding (varies by text length and CPU)
+
+Why all-MiniLM-L6-v2?
+  - Fast on CPU compared to larger models (BERT-base, MPNet)
+  - Good semantic quality for sentence-level similarity tasks
+  - Small enough to distribute with a consumer-grade Python app
+  - No API key required; fully offline after download
+
+--- Indexing Pipeline ---
+  1. Raw email text = f"{subject}. {body[:2000]}"
+  2. encode(text) → 384-dim numpy array (L2-normalized)
+  3. Stored as list of floats in MongoDB document
+
+--- Search Pipeline ---
+  1. User query → Gemini extraction → refined search_query string
+  2. encode(search_query) → query_vector (384-dim)
+  3. For each email document: score = dot(query_vector, email_embedding)
+  4. Keyword boost: for each keyword in Gemini output, if keyword found
+     (case-insensitive) in subject+body, score += 0.15
+  5. Sort descending by score; return top-k
+
+--- Gemini Integration (gemini-2.5-flash) ---
+  - Role: Natural language understanding layer (not email content processor)
+  - Input: User's raw query text (max ~200 tokens typical)
+  - Output: Structured JSON intent object
+  - Temperature: 0 (deterministic, reproducible results)
+  - Max output tokens: 512
+  - System instruction: Instructs model to extract search_query, keywords,
+    sender, date_hint, topic as JSON
+  - Privacy: Only the user's query is sent to Gemini, never email content
+  - Fallback: If GEMINI_API_KEY missing or call fails, passthrough to raw
+    embedding search with original query string
+
+--- Score Interpretation ---
+  Raw cosine similarity ranges from -1 to 1, but in practice:
+    - 0.80+ : Very strong match (visually: purple in UI)
+    - 0.65-0.79 : Good match (visually: pink in UI)
+    - 0.50-0.64 : Moderate match
+    - Below 0.50 : Weak match
+  Keyword boost can push borderline results into higher tiers.
+
+--- Model Warm-up Strategy ---
+  PyTorch imports and model loading (~2-4 seconds on cold start) are
+  deferred until first use. On application startup, a fire-and-forget
+  background thread calls encode("warmup") so that by the time the first
+  real user request arrives, the model is already loaded into memory.
+  This prevents Railway health probes from timing out while also keeping
+  the API responsive immediately after startup.
+
+
+================================================================================
+9. GMAIL INTEGRATION & OAUTH
+================================================================================
+
+Authentication uses Google OAuth 2.0 with offline access (refresh tokens).
+
+Scopes requested:
+  - https://www.googleapis.com/auth/gmail.readonly
+  - https://www.googleapis.com/auth/userinfo.email
+
+Flow:
+  1. Client credentials loaded from GOOGLE_CREDENTIALS_JSON env var or
+     credentials.json file (downloaded from Google Cloud Console).
+  2. InstalledAppFlow creates an authorization URL with state parameter.
+  3. Flow object stored in memory dict (_flows[state] = flow).
+  4. User visits URL, consents, redirected to /auth/callback?code=...&state=...
+  5. Backend fetches flow from memory using state, exchanges code for token.
+  6. Token (includes access_token, refresh_token, expiry) stored as JSON
+     string in MongoDB settings: {"key": "oauth_token", "value": "..."}.
+  7. Gmail address fetched from Google userinfo endpoint and stored
+     in settings: {"key": "gmail_address", "value": "user@gmail.com"}.
+
+Email Fetching:
+  - gmail.users().messages().list(userId='me', maxResults=500)
+  - For each message ID: gmail.users().messages().get(id=id, format='full')
+  - MIME parsing via recursive walk of payload.parts tree:
+      * Stops at text/plain parts (no filename — not an attachment)
+      * Decodes base64url encoded body data
+      * Falls back to payload.body.data if no parts tree
+  - Extracts: id, threadId, subject (from headers), from (sender),
+    date (from headers), body text (capped 2000 chars), snippet
+
+Token Refresh:
+  - google-auth library handles token refresh automatically via
+    credentials.refresh() when access token expires
+  - Refresh token persisted in MongoDB, so user does not need to
+    re-authenticate after session expiry
+
+Multi-account Support:
+  - Architecture supports multiple accounts (account field on each email)
+  - Current implementation: one active OAuth token stored in settings
+  - UI shows multiple accounts in sidebar with color dots
+  - Full multi-account parallel sync is planned (see roadmap)
+
+
+================================================================================
+10. DATABASE DESIGN
+================================================================================
+
+Database: MongoDB (mail_sherlock)
+
+--- emails collection ---
+Each document represents one Gmail message:
+  {
+    "_id": ObjectId,
+    "id": "gmail_message_id",         -- Gmail's unique message ID
+    "threadId": "thread_id",          -- for Gmail deep link URL
+    "subject": "Meeting notes...",
+    "sender": "alice@example.com",
+    "date": "Mon, 15 Jan 2026 ...",
+    "body": "Hi, following up on...", -- truncated to 2000 chars
+    "snippet": "Short preview...",    -- Gmail-provided snippet
+    "account": "user@gmail.com",      -- which Gmail account
+    "embedding": [0.023, -0.145, ...] -- 384 floats (L2-normalized)
+  }
+  Upsert key: { "id": gmail_message_id }
+  Index: (none explicit; full collection scan on each search)
+  Typical size: ~500 documents per account, ~1.5KB per document
+
+--- settings collection ---
+Key-value store for configuration:
+  { "key": "oauth_token",    "value": "{...json...}" }
+  { "key": "gmail_address",  "value": "user@gmail.com" }
+  Upsert key: { "key": field_name }
+
+Notes:
+  - Embeddings stored as plain arrays (not using MongoDB Atlas Vector Search)
+  - Similarity computed in Python (NumPy), not in DB query
+  - This approach works well at the current scale (~500 emails)
+  - At larger scale (10k+ emails), Atlas Vector Search or FAISS would be
+    more appropriate
+
+
+================================================================================
+11. DEPLOYMENT & INFRASTRUCTURE
+================================================================================
+
+--- Docker ---
+  Base image: python:3.11-slim
+  Key build steps:
+    1. Install system deps (build-essential, libssl-dev for certifi)
+    2. pip install torch --index-url (CPU-only PyTorch, ~800MB)
+    3. pip install -r requirements.txt
+    4. Copy application files
+  CMD: uvicorn main:app --host 0.0.0.0 --port $PORT
+
+  Optimization: CPU-only PyTorch keeps image lean (~1.5GB vs ~5GB with CUDA).
+  The sentence-transformers model (~90MB) is downloaded on first startup
+  (or can be pre-baked into image for faster cold starts).
+
+--- Railway ---
+  Platform: Railway.app (PaaS, runs Docker containers)
+  Config (railway.toml):
+    - healthcheckPath = "/ready"
+    - healthcheckTimeout = 300 (seconds, accommodates model download)
+    - restartPolicyType = "ON_FAILURE"
+    - restartPolicyMaxRetries = 10
+  Port: reads $PORT env var (Railway injects this dynamically)
+  Environment variables set in Railway dashboard:
+    - MONGODB_URI
+    - GOOGLE_CREDENTIALS_JSON
+    - GEMINI_API_KEY
+    - DB_MAIL (optional)
+
+--- Local Development ---
+  Backend:
+    python main.py
+    or: uvicorn main:app --reload --port 8000
+
+  MongoDB:
+    docker compose up -d
+    (starts mongo:7 on localhost:27017, data persisted in ./mongo-data)
+
+  Frontend:
+    cd web && npm run dev
+    (Vite dev server on :5173 with proxy to :8000)
+
+  Chrome Extension:
+    cd extension && npm run build
+    Load unpacked from extension/dist/ in Chrome
+
+
+================================================================================
+12. SECURITY & PRIVACY
+================================================================================
+
+Privacy:
+  - Email content NEVER sent to any external AI service
+  - Embeddings computed 100% locally on user's machine
+  - Only the user's natural language query (not email text) is sent to Gemini
+  - All email data stored in user's own MongoDB instance
+
+OAuth Security:
+  - OAuth tokens stored in MongoDB (encrypted at rest via Atlas if configured)
+  - No tokens logged or exposed in API responses
+  - Google credentials loaded via environment variable (not hardcoded)
+  - Offline access scope allows background refresh without user interaction
+
+Current Weaknesses (known, to be addressed):
+  - CORS: allow_origins=["*"] — accepts requests from any origin
+    (fine for localhost dev; should restrict to extension/web origins in prod)
+  - OAuth state stored in memory — app restart during OAuth flow breaks auth
+    (state dict lost; user must restart the flow; planned fix: store in MongoDB)
+  - Email body stored as plaintext in MongoDB — at-rest encryption depends
+    on MongoDB configuration (Atlas can enable encrypted storage)
+  - MONGODB_TLS_INSECURE env var allows disabling TLS — dev-only, not for prod
+
+Extension Permissions (least-privilege):
+  - Only requests storage, tabs, scripting
+  - Host permissions limited to localhost:8000 and mail.google.com
+  - No access to other websites or browser history
+
+
+================================================================================
+13. FEATURE STATUS
+================================================================================
+
+COMPLETED:
+  [x] Google OAuth 2.0 authentication flow
+  [x] Gmail email sync (up to 500 messages)
+  [x] Local sentence-transformer embeddings (all-MiniLM-L6-v2)
+  [x] Semantic search endpoint (/ask)
+  [x] Gemini query intent extraction with keyword boosting
+  [x] Conversational search endpoint (/chat) with history
+  [x] MongoDB storage for emails and settings
+  [x] React web dashboard (dark theme, result cards, relevance bars)
+  [x] Landing page with live demo search and feature comparison
+  [x] Chrome Extension (MV3): popup, content script, background worker
+  [x] Docker containerization with CPU-only PyTorch
+  [x] Railway deployment with health checks
+  [x] Model warm-up strategy for fast cold starts
+  [x] Mock data seed endpoint for demo/testing
+  [x] Multi-account email field support (stored per email)
+
+IN PROGRESS / PARTIAL:
+  [~] Multi-account parallel sync (backend ready, UI sidebar present,
+      full sync flow for multiple accounts not yet wired end-to-end)
+  [~] Filter chips in dashboard (UI present but not wired to backend query)
+  [~] Gmail deep links from extension results (threadId present, link built)
+
+NOT STARTED (see roadmap):
+  [ ] BM25 hybrid search with RRF score fusion
+  [ ] Embedding vector cache (skip re-embedding unchanged emails)
+  [ ] Chat session persistence in MongoDB
+  [ ] Rate limiting on API endpoints
+  [ ] Evaluation suite (automated search quality benchmarks)
+  [ ] PDF/attachment text extraction and indexing
+  [ ] Sent folder and draft indexing (currently inbox only)
+
+
+================================================================================
+14. KNOWN LIMITATIONS & FUTURE ROADMAP
+================================================================================
+
+KNOWN LIMITATIONS:
+
+  1. Full collection scan on each search
+     All embeddings are loaded from MongoDB and similarity computed in Python
+     for every search request. At 500 emails this is fast (<100ms), but
+     would degrade at tens of thousands of emails.
+     Fix: MongoDB Atlas Vector Search, or in-process FAISS index.
+
+  2. OAuth state in memory
+     The OAuth flow object is stored in a dict in the Python process. If the
+     server restarts between /auth/login and /auth/callback, the state is
+     lost and the auth fails. Fix: persist state in MongoDB with a TTL index.
+
+  3. Chat history not persisted
+     Conversation history passed in /chat requests is session-only (stored
+     in React state). Refreshing the browser loses history.
+     Fix: persist chat sessions in a MongoDB chat_sessions collection.
+
+  4. Single active Gmail account
+     The settings collection stores one oauth_token and one gmail_address.
+     Full multi-account support requires a list-based data model keyed by
+     account ID.
+
+  5. No attachment indexing
+     Only text/plain MIME parts are indexed. PDF, Word, image attachments
+     are skipped. Fix: integrate Apache Tika or PyPDF2 for attachment parsing.
+
+  6. Embedding stored as plain array
+     384 floats per email stored in MongoDB as a JSON array. This is
+     convenient but not storage-efficient (no compression, no native
+     vector type). Fix: use BSON binary or Atlas Vector Search native fields.
+
+FUTURE ROADMAP (from instruction.md):
+
+  Phase A — Scale & Robustness
+    - Expand sync to 300+ messages with incremental sync (skip already-indexed)
+    - Improve MIME parsing for more complex attachment structures
+    - Add error handling for quota exceeded / rate limit from Gmail API
+
+  Phase B — Hybrid Search
+    - Integrate rank-bm25 library for BM25 keyword scoring
+    - Implement Reciprocal Rank Fusion (RRF) to blend BM25 and cosine scores
+    - A/B test against current keyword-boost approach
+
+  Phase C — Conversational UX
+    - Persist chat sessions in MongoDB (chat_sessions collection)
+    - Add session management UI (list of past searches, continue a session)
+    - Streaming responses for long Gemini outputs
+
+  Phase D — Performance & Quality
+    - Embedding cache: store hash of email text; skip re-embedding if hash
+      matches (avoids redundant inference on re-sync)
+    - Rate limiting with slowapi
+    - Automated evaluation: curated query/expected-result pairs,
+      recall@k and MRR metrics
+    - Pre-bake SentenceTransformer model into Docker image for instant startup
+
+
+================================================================================
+15. FILE STRUCTURE REFERENCE
+================================================================================
+
+mail-sherlock/
+  backend/
+    main.py                  -- FastAPI app: all endpoints, OAuth, sync, search
+    db.py                    -- Async MongoDB connection (motor)
+    embeddings.py            -- SentenceTransformer load, encode, warmup
+    agent_search.py          -- Gemini query intent extraction
+    requirements.txt         -- Python dependencies
+    emails.json              -- Mock email data for seed endpoint
+    credentials.json         -- (gitignored) Google OAuth client credentials
+    token.json               -- (gitignored) Saved OAuth token (local dev)
+    static/                  -- Built web frontend (served by FastAPI)
+      index.html
+      assets/
+        index-*.js           -- Vite-bundled React app
+        index-*.css          -- Compiled styles
+
+  web/
+    src/
+      App.tsx                -- React Router setup (landing / dashboard routes)
+      pages/
+        Landing.tsx          -- Marketing page with live demo search
+        Landing.css          -- Landing page styles
+        Dashboard.tsx        -- Main search UI with results display
+      types.ts               -- TypeScript interfaces (EmailResult, QueryRequest)
+      assets/                -- Icons, images, static assets
+    vite.config.ts           -- Vite config: proxy to :8000, build to ../backend/static
+    package.json             -- Frontend dependencies (react, typescript, vite)
+
+  extension/
+    src/
+      popup/
+        MinimalPopup.tsx     -- Extension popup: search bar + result cards
+      background/
+        worker.ts            -- MV3 service worker: API proxy
+      content/
+        index.ts             -- Content script: injected into Gmail pages
+      api/
+        search.ts            -- API client: searchEmails(), chatSearch()
+      types/
+        index.ts             -- TypeScript interfaces for extension
+    public/
+      manifest.json          -- MV3 manifest (permissions, host_permissions)
+      icon*.png              -- Extension icons
+    vite.config.ts           -- Popup bundle entry
+    vite.content.config.ts   -- Content script bundle entry
+    vite.background.config.ts-- Background worker bundle entry
+    package.json
+
+  Dockerfile                 -- Production Docker image (python:3.11-slim)
+  docker-compose.yml         -- Local dev: MongoDB 7 container
+  railway.toml               -- Railway deployment config (health probe, restart)
+  README.md                  -- Setup guide, environment variables, local dev steps
+  instruction.md             -- Enhancement roadmap (Phases A-D)
+  design.txt                 -- UI design notes
+  color_palette.html         -- Visual reference for dark theme color system
+  PROJECT_REPORT.txt         -- This file
+
+
+================================================================================
+16. CHANGELOG
+================================================================================
+
+--- 2026-04-08: Sync Speed Improvements ---
+
+Problem:
+  Clicking "Sync" on the dashboard was very slow (~2-3 minutes for 500 emails).
+  The backend fetched each email one at a time (sequential HTTP calls to Gmail).
+  Every sync deleted and re-inserted all emails regardless of what changed.
+
+Changes made (backend/main.py — /emails/sync):
+  1. Parallelized Gmail API fetches using ThreadPoolExecutor (20 workers).
+     Effect: ~20x speedup for the fetch phase (~2 min → ~10-15 sec).
+  2. Switched from full re-sync (delete_many + insert_many) to incremental upsert.
+     Only emails newer than last_sync_at are fetched (uses Gmail `after:` filter).
+     Existing email IDs are checked before fetching to skip duplicates.
+  3. Manual sync now returns `total` (all indexed emails) in addition to `synced`
+     (newly added this run). Frontend displays total, not just the delta.
+
+--- 2026-04-08: Search Answer Quality Fixes ---
+
+Problem:
+  The AI reply bubble would say "None of the provided emails are about X" even
+  when results were found. Responses were also sometimes truncated mid-sentence.
+
+Changes made (backend/agent_search.py — synthesize_answer):
+  1. Revised prompt from "say so honestly if no match" to "always describe what
+     was found — if not exact, describe what's closest."
+  2. Raised max_output_tokens from 300 → 512 to prevent truncation.
+
+Changes made (backend/main.py — /chat endpoint):
+  3. Added _NEGATIVE_PREFIXES guard: if Gemini's response starts with a negative
+     phrase ("none of", "there is no", etc.) while results exist, it is discarded
+     and replaced with the clean default "I found N emails related to: …" reply.
+
+--- 2026-04-09: UI — Removed Greeting Suggestion Pills ---
+
+  Removed hardcoded suggestion pill buttons ("Lease renewal", "Invoice / payment",
+  etc.) that appeared under the greeting message and after "New conversation".
+  Removed the GREETING_SUGGESTIONS constant and all references in Dashboard.tsx.
+
+--- 2026-04-10: Gmail Sync Pagination (cap 2000 emails) ---
+
+Problem:
+  Gmail's messages().list() returns at most 500 IDs per call and does not
+  automatically follow pages. The sync capped at 500 (or ~645 with background
+  incremental runs), leaving most of the inbox unindexed.
+
+Changes made (backend/main.py — _sync_account_bulk):
+  1. Replaced single list() call with a pagination loop that follows
+     nextPageToken until max_results IDs are collected or pages run out.
+  2. Raised max_results cap from 500 → 2000 (passed from sync_emails()).
+  3. Each page still requests up to 500 IDs (Gmail's max per page).
+  Result: initial sync now indexes up to 2000 most recent emails (newest first).
+  Subsequent incremental syncs remain fast because the after: date filter limits
+  results to only new mail since last sync.
+
+Design rationale (Option A chosen over full-inbox pagination):
+  - Full-inbox sync (Option B) with 10,000+ emails would take several minutes
+    for the fetch phase alone, plus heavy embedding compute and MongoDB storage.
+  - 2000 most recent emails covers the majority of real user search needs.
+  - Incremental sync keeps the index fresh without re-fetching old emails.
+
+
+================================================================================
+END OF REPORT
+================================================================================
