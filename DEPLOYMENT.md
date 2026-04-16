@@ -3,16 +3,28 @@
 ## Architecture
 
 ```
-Chrome Extension  →  (localhost for dev, prod URL for release)
-                          ↓
-              Railway (Dockerfile)
-              ┌─────────────────────┐
-              │  FastAPI Backend    │
-              │  + serves React SPA │  ←  Vite builds to backend/static/
-              └────────┬────────────┘
+              AWS EC2 (t3.small, Docker)
+              ┌─────────────────────────────┐
+              │  nginx (port 80/443)        │  ← HTTPS termination
+              │    ↓                        │
+              │  FastAPI Backend            │
+              │  + serves React SPA         │  ← Vite builds to backend/static/
+              └────────┬────────────────────┘
                        │
               MongoDB Atlas   +   Google Gemini AI
 ```
+
+---
+
+## Instance Recommendation
+
+| Instance | RAM | vCPU | Cost | Notes |
+|---|---|---|---|---|
+| t2.micro | 1 GB | 1 | Free (12 mo) | Risky — torch may OOM |
+| **t3.small** | **2 GB** | **2** | **~$15/mo** | **Recommended** |
+| t3.medium | 4 GB | 2 | ~$30/mo | Comfortable headroom |
+
+Use **t3.small** minimum. `torch` + `sentence-transformers` alone consume ~800 MB at runtime.
 
 ---
 
@@ -43,37 +55,200 @@ EXPOSE 8000
 CMD uvicorn main:app --app-dir backend --host 0.0.0.0 --port ${PORT:-8000}
 ```
 
-### 2. Set environment variables on Railway
+### 2. Fix hardcoded MongoDB URI ✓ Done
 
-Go to Railway project → Variables and set:
+`backend/db.py` hardcoded fallback has been removed. `MONGODB_URI` must be set via env var.
 
-| Variable | Value |
-|---|---|
-| `GEMINI_API_KEY` | Your Gemini API key |
-| `GOOGLE_CREDENTIALS_JSON` | Full contents of `credentials.json` |
-| `BACKEND_URL` | `https://your-app.up.railway.app` (set after first deploy) |
-| `MONGODB_URI` | Your Atlas connection string |
+### 3. CORS ✓ Done
 
-### 3. Fix hardcoded MongoDB URI
+`allow_origins=["*"]` — no changes needed.
 
-`backend/db.py` has a plaintext MongoDB URI as the default fallback. Remove it and require the env var.
+---
 
-### 4. MongoDB Atlas — whitelist Railway IPs
+## Step-by-Step: Launch AWS EC2
 
-In Atlas → Network Access, either:
+### Step 1 — Launch the instance
+
+1. Go to [console.aws.amazon.com/ec2](https://console.aws.amazon.com/ec2)
+2. Click **Launch instance**
+3. Configure:
+   - **Name**: `mail-sherlock`
+   - **AMI**: Ubuntu Server 22.04 LTS
+   - **Instance type**: `t3.small`
+   - **Key pair**: create a new one, download the `.pem` file — save it, you can't re-download
+   - **Storage**: 20 GB gp3 (default is 8 GB, not enough for Docker images)
+
+### Step 2 — Configure security group
+
+In the **Network settings** section, add these inbound rules:
+
+| Type | Port | Source | Purpose |
+|---|---|---|---|
+| SSH | 22 | My IP | SSH access |
+| HTTP | 80 | 0.0.0.0/0 | Web traffic |
+| HTTPS | 443 | 0.0.0.0/0 | HTTPS traffic |
+| Custom TCP | 8000 | 0.0.0.0/0 | Direct app access (temporary) |
+
+### Step 3 — SSH into the instance
+
+```bash
+chmod 400 your-key.pem
+ssh -i your-key.pem ubuntu@<EC2-PUBLIC-IP>
+```
+
+The public IP is shown in EC2 → Instances → your instance.
+
+### Step 4 — Install Docker
+
+```bash
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y docker.io docker-compose-v2 git nginx certbot python3-certbot-nginx
+sudo systemctl enable docker
+sudo usermod -aG docker ubuntu
+newgrp docker
+```
+
+### Step 5 — Clone the repo
+
+```bash
+git clone https://github.com/your-username/mail-sherlock.git
+cd mail-sherlock
+```
+
+### Step 6 — Create the .env file on the server
+
+```bash
+nano backend/.env
+```
+
+Paste your environment variables:
+
+```env
+MONGODB_URI=mongodb+srv://...
+GEMINI_API_KEY=...
+GOOGLE_CREDENTIALS_JSON={"web":{...}}
+BACKEND_URL=http://<EC2-PUBLIC-IP>:8000
+DB_MAIL=mail_sherlock
+```
+
+> Set `BACKEND_URL` to your EC2 IP for now. Update to your domain after HTTPS is set up.
+
+### Step 7 — Build and run with Docker
+
+```bash
+docker build -t mail-sherlock .
+docker run -d \
+  --name mail-sherlock \
+  --restart unless-stopped \
+  --env-file backend/.env \
+  -p 8000:8000 \
+  mail-sherlock
+```
+
+Verify it's running:
+```bash
+docker ps
+curl http://localhost:8000/ready
+```
+
+### Step 8 — Set up nginx as reverse proxy
+
+```bash
+sudo nano /etc/nginx/sites-available/mail-sherlock
+```
+
+Paste:
+
+```nginx
+server {
+    listen 80;
+    server_name <EC2-PUBLIC-IP>;  # replace with your domain later
+
+    location / {
+        proxy_pass http://localhost:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 120s;
+    }
+}
+```
+
+Enable it:
+
+```bash
+sudo ln -s /etc/nginx/sites-available/mail-sherlock /etc/nginx/sites-enabled/
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+App is now accessible at `http://<EC2-PUBLIC-IP>`.
+
+### Step 9 — Set up HTTPS with a domain (optional but recommended)
+
+If you have a domain name, point its A record to your EC2 IP, then:
+
+```bash
+sudo certbot --nginx -d yourdomain.com
+```
+
+Certbot auto-configures nginx for HTTPS and auto-renews the certificate.
+
+Update `BACKEND_URL` in your `.env`:
+```
+BACKEND_URL=https://yourdomain.com
+```
+
+Then restart the container:
+```bash
+docker restart mail-sherlock
+```
+
+### Step 10 — Update Google OAuth redirect URI
+
+In Google Cloud Console → Credentials → your OAuth client → Authorized redirect URIs, add:
+```
+http://<EC2-PUBLIC-IP>/auth/callback
+```
+Or if using a domain:
+```
+https://yourdomain.com/auth/callback
+```
+
+### Step 11 — MongoDB Atlas IP whitelist
+
+In Atlas → Network Access → Add IP Address:
 - Allow `0.0.0.0/0` (all IPs), or
-- Add Railway's static outbound IPs
+- Add your EC2 public IP specifically
 
-### 5. Update CORS in main.py
+### Step 12 — Test the deploy
 
-Make sure `allow_origins` includes your Railway domain.
-
-### 6. Test the deploy
-
-- [ ] `/ready` returns 200
+- [ ] `curl http://<EC2-PUBLIC-IP>/ready` returns 200
 - [ ] OAuth login flow works end-to-end
 - [ ] Emails sync correctly
 - [ ] AI query returns results
+
+---
+
+## Updating the App (manual)
+
+When you push new code and want to redeploy:
+
+```bash
+ssh -i your-key.pem ubuntu@<EC2-PUBLIC-IP>
+cd mail-sherlock
+git pull
+docker build -t mail-sherlock .
+docker stop mail-sherlock && docker rm mail-sherlock
+docker run -d \
+  --name mail-sherlock \
+  --restart unless-stopped \
+  --env-file backend/.env \
+  -p 8000:8000 \
+  mail-sherlock
+```
+
+> See `CICD.md` to automate this with GitHub Actions.
 
 ---
 
@@ -110,48 +285,21 @@ These users can log in with no warning. Anyone not on the list gets:
 
 1. Left sidebar → **APIs & Services** → **Credentials**
 2. Click your **OAuth 2.0 Client ID**
-3. Under **Authorized redirect URIs**, add:
+3. Under **Authorized redirect URIs**, add your EC2 URL:
    ```
-   https://your-app.up.railway.app/auth/callback
+   http://<EC2-PUBLIC-IP>/auth/callback
    ```
 4. Keep `http://localhost:8000/auth/callback` for local dev
 5. Click **Save**
 
-### Step 5: Set `BACKEND_URL` on Railway
-
-After your first deploy, copy the Railway-assigned URL and set:
-```
-BACKEND_URL=https://your-app.up.railway.app
-```
-This is used by `main.py` to construct the OAuth redirect URI.
-
-### Step 6: Export `credentials.json` as an env var
+### Step 5: Export `credentials.json` as an env var
 
 1. In Google Cloud Console → **Credentials** → click your OAuth client
 2. Click **Download JSON**
 3. Open the file and copy the entire contents
-4. In Railway → Variables:
+4. Add to `backend/.env` on the EC2 server:
    - Key: `GOOGLE_CREDENTIALS_JSON`
-   - Value: paste the full JSON
-
----
-
-## Chrome Extension
-
-The extension currently points to `http://127.0.0.1:8000` (local only). For a published extension:
-
-1. Update `extension/src/api/search.ts` and `extension/src/background/background.ts`:
-   ```ts
-   const API_URL = "https://your-app.up.railway.app";
-   ```
-2. Update `extension/public/manifest.json` host permissions to include the production URL
-3. Rebuild: `npm run build` in `/extension`
-4. Zip the `dist/` folder
-
-To publish on Chrome Web Store:
-- Create a developer account at `chrome.google.com/webstore/devconsole`
-- One-time $5 registration fee
-- Submit the zip with screenshots, description, and privacy policy
+   - Value: paste the full JSON on one line
 
 ---
 
