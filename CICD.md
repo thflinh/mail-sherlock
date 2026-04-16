@@ -30,10 +30,10 @@ Push to any branch
 
 ### GitHub Secrets (set in repo → Settings → Secrets and variables → Actions)
 
-| Secret | How to get it |
-|---|---|
-| `EC2_HOST` | Your EC2 public IP address |
-| `EC2_USER` | `ubuntu` (default for Ubuntu AMI) |
+| Secret        | How to get it                                                                |
+| ------------- | ---------------------------------------------------------------------------- |
+| `EC2_HOST`    | Your EC2 public IP address                                                   |
+| `EC2_USER`    | `ubuntu` (default for Ubuntu AMI)                                            |
 | `EC2_SSH_KEY` | Contents of your `.pem` key file (the whole thing including `-----BEGIN...`) |
 
 That's it. The CD job SSHs into your EC2 instance, pulls the latest code, rebuilds, and restarts the container.
@@ -195,13 +195,13 @@ Enforce CI passes before merging to `main`.
 
 ## Time Summary
 
-| Step | What | Time |
-|---|---|---|
-| 1 | Add GitHub secrets (EC2 host, user, SSH key) | 10 min |
-| 2 | Upgrade CI workflow | 1–2 hrs |
-| 3 | Add CD deploy job via SSH | 30 min |
-| 4 | Branch protection rules | 15 min |
-| **Total** | | **~2–3 hrs** |
+| Step      | What                                         | Time         |
+| --------- | -------------------------------------------- | ------------ |
+| 1         | Add GitHub secrets (EC2 host, user, SSH key) | 10 min       |
+| 2         | Upgrade CI workflow                          | 1–2 hrs      |
+| 3         | Add CD deploy job via SSH                    | 30 min       |
+| 4         | Branch protection rules                      | 15 min       |
+| **Total** |                                              | **~2–3 hrs** |
 
 ---
 
@@ -227,14 +227,15 @@ GitHub Actions triggers
 ### Short term
 - **Add pytest** — write unit tests for key backend functions (query parsing, email formatting). Even 5–10 tests makes CI much more meaningful.
 - **Add ESLint** — catch React/TypeScript code quality issues beyond type errors.
-- **Docker build check in CI** — run `docker build` in the workflow to catch image build failures before Railway does.
+- **Docker build check in CI** — run `docker build` in the workflow to catch image build failures before they reach EC2.
+- **Smoke test after deploy** — after the container restarts, hit `/ready` and assert HTTP 200. Fails the pipeline if the deployed app is broken.
 
 ### Medium term
-- **Staging environment** — a second Railway service on a `staging` branch. Push to `staging` → deploy to staging URL. Push to `main` → deploy to production. Test before going live.
-- **Smoke test after deploy** — after `railway up`, hit `/ready` and assert HTTP 200. Fails the pipeline if the deployed app is broken.
+- **Staging environment** — a second EC2 instance on a `staging` branch. Push to `staging` → deploy to staging. Push to `main` → deploy to production. Test before going live.
 - **Dependabot** — auto-PRs for dependency updates (Python + npm). Add `.github/dependabot.yml`.
+- **Use an Elastic IP** — your EC2 public IP changes if the instance is stopped/started. An Elastic IP keeps it fixed. Free as long as the instance is running.
 
 ### Long term
-- **Preview environments** — Railway supports per-PR preview deployments. Each PR gets its own URL automatically.
 - **Performance tests** — benchmark AI query response time. Fail CI if p95 latency regresses beyond a threshold.
 - **Secret scanning** — add `trufflesecurity/trufflehog` action to block commits with leaked API keys.
+- **Docker image registry** — push built image to ECR (AWS container registry) and pull on EC2 instead of rebuilding on the server. Faster deploys.
