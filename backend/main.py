@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Response, Cookie, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -162,17 +162,20 @@ async def _ensure_accounts_migrated(db) -> None:
         pass
 
 
-async def _get_gmail_account_rows(db) -> list[dict]:
+async def _get_gmail_account_rows(db, user_id: Optional[str] = None) -> list[dict]:
     await _ensure_accounts_migrated(db)
     doc = await db["settings"].find_one({"_id": ACCOUNTS_DOC_ID})
     rows = doc.get("accounts") if doc else None
     if not isinstance(rows, list):
         return []
-    return [r for r in rows if isinstance(r, dict) and r.get("token_json")]
+    valid = [r for r in rows if isinstance(r, dict) and r.get("token_json")]
+    if user_id:
+        return [r for r in valid if r.get("user_id") == user_id]
+    return valid
 
 
-async def _list_connected_emails(db) -> list[str]:
-    rows = await _get_gmail_account_rows(db)
+async def _list_connected_emails(db, user_id: Optional[str] = None) -> list[str]:
+    rows = await _get_gmail_account_rows(db, user_id=user_id)
     out = []
     for r in rows:
         e = (r.get("email") or "").strip()
@@ -181,7 +184,7 @@ async def _list_connected_emails(db) -> list[str]:
     return out
 
 
-async def _upsert_gmail_account(db, email: str, creds: Credentials) -> None:
+async def _upsert_gmail_account(db, email: str, creds: Credentials, user_id: Optional[str] = None) -> None:
     email = (email or "").strip()
     if not email:
         raise ValueError("missing email")
@@ -194,12 +197,15 @@ async def _upsert_gmail_account(db, email: str, creds: Credentials) -> None:
     new_rows = []
     for r in rows:
         if isinstance(r, dict) and (r.get("email") or "").strip() == email:
-            new_rows.append({**r, "email": email, "token_json": creds.to_json()})
+            updated = {**r, "email": email, "token_json": creds.to_json()}
+            if user_id:
+                updated["user_id"] = user_id
+            new_rows.append(updated)
             replaced = True
         else:
             new_rows.append(r)
     if not replaced:
-        new_rows.append({"email": email, "token_json": creds.to_json(), "last_sync_at": None})
+        new_rows.append({"email": email, "token_json": creds.to_json(), "last_sync_at": None, "user_id": user_id})
     await db["settings"].update_one(
         {"_id": ACCOUNTS_DOC_ID},
         {"$set": {"accounts": new_rows}},
@@ -250,16 +256,12 @@ def _oauth_error_html(message: str, status_code: int = 400) -> HTMLResponse:
     return HTMLResponse(content=body, status_code=status_code)
 
 
-async def _get_stored_gmail_address(db) -> Optional[str]:
-    """Primary connected Gmail (first account) for backward-compatible API fields."""
-    emails = await _list_connected_emails(db)
+async def _get_stored_gmail_address(db, user_id: Optional[str] = None) -> Optional[str]:
+    """Primary connected Gmail for this user (or global fallback)."""
+    emails = await _list_connected_emails(db, user_id=user_id)
     if emails:
         return emails[0]
-    doc = await db["settings"].find_one({"_id": SETTINGS_DOC_ID})
-    if not doc:
-        return None
-    addr = doc.get("gmail_address")
-    return addr.strip() if isinstance(addr, str) and addr.strip() else None
+    return None
 
 
 def _has_attachment(payload: dict) -> bool:
@@ -440,20 +442,37 @@ def _new_session_token() -> str:
     return secrets.token_urlsafe(32)
 
 
+async def _get_user_id(
+    authorization: Optional[str] = Header(default=None),
+    session_token: Optional[str] = Cookie(default=None),
+) -> Optional[str]:
+    """Resolve user_id from Authorization header or session_token cookie."""
+    t = None
+    if authorization and authorization.startswith("Bearer "):
+        t = authorization[7:].strip()
+    if not t:
+        t = session_token
+    if not t:
+        return None
+    sess = await get_db()["auth_sessions"].find_one({"_id": t})
+    return (sess or {}).get("user_id")
+
+
 @app.get("/ready")
 def ready():
     return {"status": "ok"}
 
 
 @app.get("/status")
-async def app_status(response: Response):
+async def app_status(response: Response, user_id: Optional[str] = Depends(_get_user_id)):
     """Returns auth state and email count so the frontend knows what setup step the user is on."""
     response.headers["Cache-Control"] = "no-store"
     db = get_db()
-    accounts = await _list_connected_emails(db)
-    gmail_auth_email = accounts[0] if accounts else await _get_stored_gmail_address(db)
+    accounts = await _list_connected_emails(db, user_id=user_id)
+    gmail_auth_email = accounts[0] if accounts else None
     try:
-        email_count = await db["emails"].count_documents({})
+        query = {"accountEmail": {"$in": accounts}} if accounts else {"accountEmail": {"$in": []}}
+        email_count = await db["emails"].count_documents(query)
     except PyMongoError:
         email_count = 0
     return {
@@ -598,8 +617,12 @@ async def auth_session_logout(body: dict):
 
 
 @app.get("/auth/login")
-def auth_login():
-    """Redirects the user to Google's OAuth consent screen."""
+def auth_login(token: Optional[str] = None):
+    """Redirects the user to Google's OAuth consent screen.
+
+    token: optional session token from /auth/login/email — used to link the Gmail
+    account to an existing user rather than creating a new one.
+    """
     try:
         config = _load_credentials_config()
     except RuntimeError as e:
@@ -609,13 +632,11 @@ def auth_login():
         scopes=SCOPES,
         redirect_uri=os.getenv("BACKEND_URL", "http://localhost:8000").rstrip("/") + "/auth/callback",
     )
-    # select_account: lets users pick a *different* Google identity when adding another mailbox
-    # (otherwise Google often re-approves the same session and only one account is stored).
     auth_url, state = flow.authorization_url(
         prompt="select_account consent",
         access_type="offline",
     )
-    _flows[state] = flow
+    _flows[state] = {"flow": flow, "user_token": token or ""}
     return RedirectResponse(auth_url)
 
 
@@ -627,12 +648,16 @@ async def auth_callback(code: Optional[str] = None, state: Optional[str] = None)
             "This page only works when Google redirects here after you approve access. "
             'Open http://localhost:8000/ and click "Authorize Gmail", or go to /auth/login.',
         )
-    flow = _flows.pop(state, None)
-    if not flow:
+    entry = _flows.pop(state, None)
+    if not entry:
         return _oauth_error_html(
             "The sign-in session expired (for example the API restarted). "
             "Go to http://localhost:8000/auth/login and try again.",
         )
+    # Support both old plain-flow entries and new dict entries.
+    flow = entry["flow"] if isinstance(entry, dict) else entry
+    user_token = entry.get("user_token", "") if isinstance(entry, dict) else ""
+
     try:
         flow.fetch_token(code=code)
     except Exception as e:
@@ -644,7 +669,39 @@ async def auth_callback(code: Optional[str] = None, state: Optional[str] = None)
         addr = (profile.get("emailAddress") or "").strip()
         if not addr:
             return _oauth_error_html("Could not read your Gmail address from Google.", status_code=500)
-        await _upsert_gmail_account(get_db(), addr, creds)
+
+        db = get_db()
+
+        # Resolve user_id: prefer linking to an existing session, then find/create by Gmail address.
+        user_id = None
+        if user_token:
+            sess = await db["auth_sessions"].find_one({"_id": user_token})
+            if sess:
+                user_id = sess.get("user_id")
+
+        if not user_id:
+            existing_user = await db["users_auth"].find_one({"email": addr})
+            if existing_user:
+                user_id = existing_user["_id"]
+            else:
+                user_id = str(uuid.uuid4())
+                await db["users_auth"].insert_one({
+                    "_id": user_id,
+                    "email": addr,
+                    "name": addr.split("@")[0],
+                    "created_at": datetime.utcnow().isoformat(),
+                })
+
+        # Create a fresh session for the browser.
+        session_token = _new_session_token()
+        await db["auth_sessions"].insert_one({
+            "_id": session_token,
+            "user_id": user_id,
+            "email": addr,
+            "created_at": datetime.utcnow().isoformat(),
+        })
+
+        await _upsert_gmail_account(db, addr, creds, user_id=user_id)
     except Exception as e:
         logger.error("Failed to save OAuth token: %s", e)
         return _oauth_error_html(f"Authenticated but could not save credentials: {e}", status_code=500)
@@ -662,7 +719,16 @@ async def auth_callback(code: Optional[str] = None, state: Optional[str] = None)
             "<p><a href='/#/dashboard' style='color:#9b72cf'>Go to Dashboard →</a></p>"
             "</div></body></html>"
         )
-    return HTMLResponse(content=body, status_code=200)
+    response = HTMLResponse(content=body, status_code=200)
+    response.set_cookie(
+        "session_token",
+        session_token,
+        httponly=True,
+        samesite="lax",
+        max_age=30 * 24 * 3600,
+        path="/",
+    )
+    return response
 
 
 class QueryRequest(BaseModel):
@@ -757,18 +823,25 @@ def _latest_user_message(messages: list[ChatMessage]) -> str:
     return ""
 
 
-async def _semantic_search(query_text: str, top_k: int = 5, history: list[dict] | None = None, filters: dict | None = None) -> dict:
+async def _semantic_search(query_text: str, top_k: int = 5, history: list[dict] | None = None, filters: dict | None = None, user_id: Optional[str] = None) -> dict:
     db = get_db()
+    connected_accounts = await _list_connected_emails(db, user_id=user_id)
+    gmail_auth_email = connected_accounts[0] if connected_accounts else None
+
+    base_query: dict = {}
+    if user_id and connected_accounts:
+        base_query["accountEmail"] = {"$in": connected_accounts}
+    elif user_id:
+        # Authenticated but no connected accounts yet
+        return {"results": [], "gmailAuthEmail": None, "accounts": []}
+
     try:
-        emails = await db["emails"].find({}, {"_id": 0}).to_list(length=1000)
+        emails = await db["emails"].find(base_query, {"_id": 0}).to_list(length=1000)
     except PyMongoError as e:
         raise HTTPException(
             status_code=503,
             detail=f"MongoDB unavailable (check MONGODB_URI, network, TLS): {e}",
         ) from e
-
-    gmail_auth_email = await _get_stored_gmail_address(db)
-    connected_accounts = await _list_connected_emails(db)
     q = query_text.strip()
     if not q:
         return {"results": [], "gmailAuthEmail": gmail_auth_email, "accounts": connected_accounts}
@@ -910,12 +983,12 @@ async def _semantic_search(query_text: str, top_k: int = 5, history: list[dict] 
 
 
 @app.post("/ask")
-async def ask(req: QueryRequest):
-    return await _semantic_search(req.query, req.top_k)
+async def ask(req: QueryRequest, user_id: Optional[str] = Depends(_get_user_id)):
+    return await _semantic_search(req.query, req.top_k, user_id=user_id)
 
 
 @app.post("/chat")
-async def chat(req: ChatRequest):
+async def chat(req: ChatRequest, user_id: Optional[str] = Depends(_get_user_id)):
     query_text = _latest_user_message(req.messages)
     if not query_text:
         raise HTTPException(status_code=400, detail="Add at least one user message with text.")
@@ -943,7 +1016,7 @@ async def chat(req: ChatRequest):
         return {"reply": resp.reply, "mode": resp.mode, "results": [], "intent": intent}
 
     # Step 2: hybrid search to get candidates (used by find/answer/summarize/extract)
-    search_result = await _semantic_search(query_text, req.top_k, history=history, filters=filters)
+    search_result = await _semantic_search(query_text, req.top_k, history=history, filters=filters, user_id=user_id)
     candidates = search_result.get("results", [])
     gmail_auth_email = search_result.get("gmailAuthEmail")
     connected_accounts = search_result.get("accounts", [])
@@ -1026,10 +1099,10 @@ async def get_email(email_id: str):
 
 
 @app.get("/accounts")
-async def get_accounts():
+async def get_accounts(user_id: Optional[str] = Depends(_get_user_id)):
     """Return all connected accounts with status, email count, and last-synced time."""
     db = get_db()
-    rows = await _get_gmail_account_rows(db)
+    rows = await _get_gmail_account_rows(db, user_id=user_id)
 
     # Determine the active account (explicitly set or first in list)
     active_doc = await db["settings"].find_one({"_id": "active_account"})
@@ -1059,14 +1132,14 @@ async def get_accounts():
 
 
 @app.post("/accounts/switch")
-async def switch_account(body: dict):
+async def switch_account(body: dict, user_id: Optional[str] = Depends(_get_user_id)):
     """Switch the active account to a connected one."""
     email = (body.get("email") or "").strip()
     if not email:
         raise HTTPException(status_code=400, detail="email required")
 
     db = get_db()
-    rows = await _get_gmail_account_rows(db)
+    rows = await _get_gmail_account_rows(db, user_id=user_id)
     connected = [(r.get("email") or "").strip() for r in rows]
     if email not in connected:
         raise HTTPException(status_code=404, detail=f"Account {email} not connected")
@@ -1231,10 +1304,10 @@ async def _sync_account_bulk(db, account_email: str, creds: Credentials, max_res
 
 
 @app.post("/emails/sync")
-async def sync_emails():
+async def sync_emails(user_id: Optional[str] = Depends(_get_user_id)):
     """Fetch new emails from Gmail for every connected account and upsert into MongoDB."""
     db = get_db()
-    rows = await _get_gmail_account_rows(db)
+    rows = await _get_gmail_account_rows(db, user_id=user_id)
     if not rows:
         raise HTTPException(
             status_code=401,

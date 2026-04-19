@@ -3,6 +3,7 @@ import "./Landing.css";
 import type { Page } from "../App";
 import iconUrl from "../assets/icon.png";
 import { loginEmail, signupEmail } from "../api/auth";
+import { authLoginUrl } from "../api/http";
 
 interface Props {
   navigate: (to: Page) => void;
@@ -117,7 +118,7 @@ export default function Landing({ navigate }: Props) {
               : "Set up Mail Sherlock in less than a minute."}
           </p>
 
-          <button className="ls-google-btn" onClick={() => (window.location.href = "/auth/login")}>
+          <button className="ls-google-btn" onClick={() => (window.location.href = authLoginUrl())}>
             Continue with Google
           </button>
 

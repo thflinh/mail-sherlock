@@ -6,6 +6,7 @@ import type { AgentMode, EmailDetail, EmailResult, SearchResponse } from "../typ
 import { createEvent, deleteEvent, getEvents, type CalendarEvent } from "../api/events";
 import { getAccounts, switchAccount } from "../api/accounts";
 import { logoutSession } from "../api/auth";
+import { authHeaders, authLoginUrl } from "../api/http";
 import type { Account } from "../types";
 
 interface Props {
@@ -144,7 +145,7 @@ export default function Dashboard({ navigate }: Props) {
   }
 
   useEffect(() => {
-    fetch("/status", { cache: "no-store" })
+    fetch("/status", { cache: "no-store", headers: authHeaders() })
       .then((r) => r.json())
       .then((d) => applyStatusPayload(d))
       .catch(() => {})
@@ -154,7 +155,7 @@ export default function Dashboard({ navigate }: Props) {
   useEffect(() => {
     function onVisibility() {
       if (document.visibilityState !== "visible") return;
-      fetch("/status", { cache: "no-store" })
+      fetch("/status", { cache: "no-store", headers: authHeaders() })
         .then((r) => r.json())
         .then((d) => applyStatusPayload(d))
         .catch(() => {});
@@ -274,7 +275,7 @@ export default function Dashboard({ navigate }: Props) {
     setSyncNeedsReauth(false);
     setSyncDone(false);
     try {
-      const res = await fetch("/emails/sync", { method: "POST" });
+      const res = await fetch("/emails/sync", { method: "POST", headers: authHeaders() });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
         if (res.status === 401) {
@@ -325,7 +326,7 @@ export default function Dashboard({ navigate }: Props) {
     try {
       const res = await fetch("/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({
           messages: historyForApi,
           top_k: 5,
@@ -622,7 +623,7 @@ export default function Dashboard({ navigate }: Props) {
                   </span>
                   Settings
                 </button>
-                <a href="/auth/login" className="db-avatar-item" onClick={() => setAvatarOpen(false)}>
+                <a href={authLoginUrl()} className="db-avatar-item" onClick={() => setAvatarOpen(false)}>
                   <span className="db-avatar-item-icon">
                     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                       <path d="M7 2v10M2 7h10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
@@ -1156,7 +1157,7 @@ export default function Dashboard({ navigate }: Props) {
               })}
               {switchError && <div className="db-modal-error">{switchError}</div>}
               <div className="db-modal-divider" />
-              <a href="/auth/login" className="db-modal-add-acc" onClick={() => setSwitchModalOpen(false)}>
+              <a href={authLoginUrl()} className="db-modal-add-acc" onClick={() => setSwitchModalOpen(false)}>
                 <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden>
                   <line x1="6" y1="1" x2="6" y2="11" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
                   <line x1="1" y1="6" x2="11" y2="6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
