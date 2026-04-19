@@ -105,6 +105,35 @@ def _require_session_id(request: Request, response: Response) -> str:
     return sid
 
 
+async def _get_session_id_from_bearer(request: Request) -> Optional[str]:
+    """Resolve Bearer auth token → user_id for per-user Gmail/email scoping."""
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return None
+    token = auth[7:].strip()
+    if not token:
+        return None
+    db = get_db()
+    sess = await db["auth_sessions"].find_one({"_id": token})
+    return sess.get("user_id") if sess else None
+
+
+async def _resolve_session(request: Request, response: Response) -> str:
+    """Return user_id from Bearer token if present, else fall back to cookie session."""
+    uid = await _get_session_id_from_bearer(request)
+    if uid:
+        return uid
+    return _require_session_id(request, response)
+
+
+async def _resolve_session_optional(request: Request) -> Optional[str]:
+    """Like _resolve_session but does not mint a new cookie."""
+    uid = await _get_session_id_from_bearer(request)
+    if uid:
+        return uid
+    return _session_id_from_request(request)
+
+
 def _gmail_list_query_after_epoch(last_sync_at: Optional[int]) -> str:
     """Gmail `messages().list(q=...)` filter for mail after last sync. Empty = no filter (initial backfill).
 
@@ -509,7 +538,7 @@ def ready():
 async def app_status(request: Request, response: Response):
     """Returns auth state and email count so the frontend knows what setup step the user is on."""
     response.headers["Cache-Control"] = "no-store"
-    session_id = _session_id_from_request(request)
+    session_id = await _resolve_session_optional(request)
     db = get_db()
     accounts = await _list_connected_emails(db, session_id=session_id)
     gmail_auth_email = accounts[0] if accounts else None
@@ -660,14 +689,23 @@ async def auth_session_logout(body: dict):
 
 
 @app.get("/auth/login")
-def auth_login(request: Request):
+async def auth_login(request: Request, token: Optional[str] = None):
     """Redirects the user to Google's OAuth consent screen."""
     try:
         config = _load_credentials_config()
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
-    existing = _session_id_from_request(request)
-    session_id = existing or _new_session_id()
+    # Prefer user_id derived from the app auth token (so Gmail is scoped per account,
+    # not per browser cookie — two users on the same browser each get their own emails).
+    session_id = None
+    if token:
+        db = get_db()
+        sess = await db["auth_sessions"].find_one({"_id": token})
+        if sess:
+            session_id = sess.get("user_id")
+    if not session_id:
+        existing = _session_id_from_request(request)
+        session_id = existing or _new_session_id()
     flow = Flow.from_client_config(
         config,
         scopes=SCOPES,
@@ -1147,13 +1185,13 @@ async def _augment_email_body_for_llm(
 
 @app.post("/ask")
 async def ask(req: QueryRequest, request: Request, response: Response):
-    session_id = _require_session_id(request, response)
+    session_id = await _resolve_session(request, response)
     return await _semantic_search(req.query, session_id, top_k=req.top_k)
 
 
 @app.post("/chat")
 async def chat(req: ChatRequest, request: Request, response: Response):
-    session_id = _require_session_id(request, response)
+    session_id = await _resolve_session(request, response)
     query_text = _latest_user_message(req.messages)
     if not query_text:
         raise HTTPException(status_code=400, detail="Add at least one user message with text.")
@@ -1393,10 +1431,11 @@ async def get_email(email_id: str):
 
 
 @app.get("/accounts")
-async def get_accounts():
+async def get_accounts(request: Request, response: Response):
     """Return all connected accounts with status, email count, and last-synced time."""
+    session_id = await _resolve_session_optional(request)
     db = get_db()
-    rows = await _get_gmail_account_rows(db)
+    rows = await _get_gmail_account_rows(db, session_id=session_id)
 
     # Determine the active account (explicitly set or first in list)
     active_doc = await db["settings"].find_one({"_id": "active_account"})
@@ -1426,14 +1465,15 @@ async def get_accounts():
 
 
 @app.post("/accounts/switch")
-async def switch_account(body: dict):
+async def switch_account(request: Request, response: Response, body: dict):
     """Switch the active account to a connected one."""
     email = (body.get("email") or "").strip()
     if not email:
         raise HTTPException(status_code=400, detail="email required")
 
+    session_id = await _resolve_session_optional(request)
     db = get_db()
-    rows = await _get_gmail_account_rows(db)
+    rows = await _get_gmail_account_rows(db, session_id=session_id)
     connected = [(r.get("email") or "").strip() for r in rows]
     if email not in connected:
         raise HTTPException(status_code=404, detail=f"Account {email} not connected")
@@ -1607,7 +1647,7 @@ async def _sync_account_bulk(db, account_email: str, creds: Credentials, max_res
 @app.post("/emails/sync")
 async def sync_emails(request: Request, response: Response):
     """Fetch new emails from Gmail for every connected account and upsert into MongoDB."""
-    session_id = _require_session_id(request, response)
+    session_id = await _resolve_session(request, response)
     db = get_db()
     rows = await _get_gmail_account_rows(db, session_id=session_id)
     if not rows:
@@ -1663,7 +1703,7 @@ async def sync_emails(request: Request, response: Response):
 async def seed_emails(request: Request, response: Response):
     """Load mock emails into MongoDB (run once to populate)."""
     db = get_db()
-    session_id = _require_session_id(request, response)
+    session_id = await _resolve_session(request, response)
     path = Path(__file__).parent / "emails.json"
     emails = json.loads(path.read_text())
     for e in emails:
