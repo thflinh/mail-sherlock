@@ -7,6 +7,8 @@ import re
 
 import google.genai as genai
 
+from passage_select import extract_relevant_passage
+
 logger = logging.getLogger(__name__)
 
 _api_key = os.environ.get("GEMINI_API_KEY", "")
@@ -46,7 +48,9 @@ Schema:
   "date_hint": "<last_week | last_month | last_year | null>",
   "topic": "<one sentence: what the user is currently looking for>",
   "search_focus": "<subject | body | sender | any>",
-  "extract_field": "<deadline | amount | address | phone | date | name | null>"
+  "extract_field": "<deadline | amount | address | phone | date | name | null>",
+  "uses_prior_context": <true | false>,
+  "context_ref": "<first | second | third | last | active | null>"
 }
 
 mode rules:
@@ -63,6 +67,16 @@ search_focus rules:
 - "any"     — unclear, or the query spans multiple fields
 
 extract_field: only set when mode="extract". Identify the specific data type to extract.
+
+uses_prior_context:
+- true when the user refers to emails already shown in this conversation (assistant search results or prior turns) instead of asking for a brand-new search. Examples: "the first one", "that email", "what about the second?", "did it mention a deadline?", "the one from yesterday" (still about prior results).
+- false when they want new results ("find emails about…", "now search for…", a new topic, or no prior results to refer to).
+
+context_ref (only meaningful when uses_prior_context is true; otherwise null):
+- "first" / "second" / "third" — ordinal position in the last result list (1-based ranking the user sees).
+- "last" — the last email in that list.
+- "active" — the email the user has open in the reader (if unclear from text, still set uses_prior_context true and context_ref "active").
+- null — no specific ordinal: same email as before, top result, or the one that best fits the follow-up (e.g. "the AWS one" among prior hits).
 
 When needs_clarification=true, set clarifying_question to the question and leave other fields as empty/null — the search will not run until the user replies.
 When mode="chitchat", leave search_query/keywords/sender/date_hint as empty/null — no search is needed."""
@@ -115,32 +129,20 @@ def understand_query(user_query: str, history: list[dict] | None = None) -> dict
             },
         )
         parsed = json.loads(_strip_json(response.text))
+        upc = parsed.get("uses_prior_context", False)
+        if isinstance(upc, str):
+            parsed["uses_prior_context"] = upc.strip().lower() in ("true", "1", "yes")
+        elif isinstance(upc, bool):
+            pass
+        elif upc in (1, 1.0):
+            parsed["uses_prior_context"] = True
+        else:
+            parsed["uses_prior_context"] = False
         logger.debug("Gemini intent: %s", parsed)
         return parsed
     except Exception as exc:
         logger.warning("Gemini understand_query failed (%s) — raw query fallback.", exc)
         return _fallback(user_query)
-
-
-def _extract_relevant_passage(body: str, query: str, window: int = 400) -> str:
-    """Find the 400-char window in body most relevant to query keywords.
-
-    Slides a window across the body in 100-char steps and returns the chunk
-    whose words overlap most with the query — so Gemini sees the relevant
-    passage even when it sits past char 400.
-    """
-    if not body:
-        return ""
-    query_words = set(query.lower().split())
-    best_score = -1
-    best_passage = body[:window]
-    for i in range(0, max(1, len(body) - window + 1), 100):
-        chunk = body[i: i + window]
-        score = sum(1 for w in query_words if w in chunk.lower())
-        if score > best_score:
-            best_score = score
-            best_passage = chunk
-    return best_passage
 
 
 def rerank(user_query: str, candidates: list[dict], top_k: int = 5) -> list[dict]:
@@ -163,7 +165,7 @@ def rerank(user_query: str, candidates: list[dict], top_k: int = 5) -> list[dict
     # Build summaries with more context so Gemini can distinguish similar emails
     summaries = []
     for i, e in enumerate(candidates):
-        body_snippet = _extract_relevant_passage(e.get("body") or "", user_query, window=400).replace("\n", " ")
+        body_snippet = extract_relevant_passage(e.get("body") or "", user_query, window=400).replace("\n", " ")
         date = e.get("date", "unknown date")
         summaries.append(
             f'ID {i}: [{date}] From: {e.get("sender","")} '
@@ -216,7 +218,7 @@ def synthesize_answer(query: str, results: list[dict]) -> str:
 
     context_parts = []
     for i, r in enumerate(results[:5]):
-        body_preview = _extract_relevant_passage(r.get("body") or "", query, window=600)
+        body_preview = extract_relevant_passage(r.get("body") or "", query, window=600)
         context_parts.append(
             f"Email {i + 1} [{r.get('date', '')}] from {r.get('sender', '')}:\n"
             f"Subject: {r.get('subject', '')}\n"
@@ -256,4 +258,6 @@ def _fallback(user_query: str) -> dict:
         "topic": user_query,
         "search_focus": "any",
         "extract_field": None,
+        "uses_prior_context": False,
+        "context_ref": None,
     }

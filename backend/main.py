@@ -1,8 +1,8 @@
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from contextlib import asynccontextmanager
 from typing import Literal, Optional
 import html
@@ -11,6 +11,7 @@ import numpy as np
 import os
 import uuid
 from pathlib import Path
+import secrets
 from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request as GoogleRequest
@@ -43,6 +44,8 @@ from agent_search import understand_query, rerank
 from agent import find as agent_find, answer as agent_answer, summarize as agent_summarize, extract as agent_extract, chitchat as agent_chitchat
 from reader import get_email_for_reader
 from labels import assign_labels_bulk
+from chunk_index import ensure_chunk_indexes, merged_chunk_body_for_query, rebuild_chunks_for_emails
+from passage_select import body_for_llm, log_rag_passage_context
 
 logger = logging.getLogger(__name__)
 
@@ -89,9 +92,9 @@ def _load_credentials_config() -> dict:
     )
 
 
-async def _load_token(db) -> Optional[Credentials]:
+async def _load_token(db, session_id: str) -> Optional[Credentials]:
     """Load OAuth token from MongoDB, falling back to local token.json for dev."""
-    doc = await db["settings"].find_one({"_id": TOKEN_DOC_ID})
+    doc = await db["settings"].find_one({"_id": _token_doc_id(session_id)})
     if doc and doc.get("token_json"):
         return Credentials.from_authorized_user_info(json.loads(doc["token_json"]), SCOPES)
     if TOKEN_FILE.exists():
@@ -99,10 +102,10 @@ async def _load_token(db) -> Optional[Credentials]:
     return None
 
 
-async def _save_token(db, creds: Credentials) -> None:
+async def _save_token(db, session_id: str, creds: Credentials) -> None:
     """Persist OAuth token to MongoDB so it survives server restarts."""
     await db["settings"].update_one(
-        {"_id": TOKEN_DOC_ID},
+        {"_id": _token_doc_id(session_id)},
         {"$set": {"token_json": creds.to_json()}},
         upsert=True,
     )
@@ -356,6 +359,7 @@ async def _incremental_sync_account(db, account_email: str, creds: Credentials) 
         if emails:
             ops = [UpdateOne({"id": e["id"]}, {"$set": e}, upsert=True) for e in emails]
             await db["emails"].bulk_write(ops, ordered=False)
+            await rebuild_chunks_for_emails(db, emails)
 
         await _set_account_last_sync(db, account_email, int(time.time()))
         logger.info("Auto-sync [%s]: upserted %d new email(s).", account_email, len(emails))
@@ -397,6 +401,7 @@ async def _background_sync_loop():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await connect_db()
+    await ensure_chunk_indexes(get_db())
     asyncio.get_event_loop().run_in_executor(None, warmup)  # warm up embedding model
     task = asyncio.create_task(_background_sync_loop())
     yield
@@ -405,6 +410,12 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="mail-sherlock", lifespan=lifespan)
+
+_extra_origins = [
+    x.strip()
+    for x in os.getenv("CORS_ALLOW_ORIGINS", "").split(",")
+    if x.strip()
+]
 
 app.add_middleware(
     CORSMiddleware,
@@ -598,12 +609,13 @@ async def auth_session_logout(body: dict):
 
 
 @app.get("/auth/login")
-def auth_login():
+def auth_login(request: Request):
     """Redirects the user to Google's OAuth consent screen."""
     try:
         config = _load_credentials_config()
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
+    session_id = _session_id_from_request(request) or _new_session_id()
     flow = Flow.from_client_config(
         config,
         scopes=SCOPES,
@@ -620,18 +632,31 @@ def auth_login():
 
 
 @app.get("/auth/callback")
-async def auth_callback(code: Optional[str] = None, state: Optional[str] = None):
+async def auth_callback(
+    request: Request,
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+):
     """Google redirects here with ?code=...&state=... after the user grants access."""
     if not code or not state:
         return _oauth_error_html(
             "This page only works when Google redirects here after you approve access. "
             'Open http://localhost:8000/ and click "Authorize Gmail", or go to /auth/login.',
         )
-    flow = _flows.pop(state, None)
-    if not flow:
+    saved = _flows.pop(state, None)
+    if not saved:
         return _oauth_error_html(
             "The sign-in session expired (for example the API restarted). "
             "Go to http://localhost:8000/auth/login and try again.",
+        )
+    flow = saved["flow"]
+    flow_session_id = saved["session_id"]
+    cookie_session_id = _session_id_from_request(request)
+    if not cookie_session_id or cookie_session_id != flow_session_id:
+        return _oauth_error_html(
+            "Session mismatch. This sign-in link belongs to a different browser session. "
+            "Go to /auth/login and try again.",
+            status_code=401,
         )
     try:
         flow.fetch_token(code=code)
@@ -682,6 +707,15 @@ class FilterOptions(BaseModel):
     account_email: Optional[str] = None
 
 
+class ConversationContext(BaseModel):
+    """Client-owned snapshot of which search results a follow-up refers to."""
+
+    result_ids: list[str] = Field(default_factory=list)
+    active_email_id: Optional[str] = None
+    mode: str = "find"
+    search_key: Optional[str] = None
+
+
 class ChatRequest(BaseModel):
     """Multi-turn chat with mode-routing through the Gemini agent."""
 
@@ -689,6 +723,116 @@ class ChatRequest(BaseModel):
     top_k: int = 5
     filters: Optional[FilterOptions] = None
     active_email_id: Optional[str] = None
+    context: Optional[ConversationContext] = None
+
+
+def _conversation_search_key(top_k: int, filters: dict | None) -> str:
+    f = filters or {}
+    payload = json.dumps(
+        {"top_k": top_k, "filters": {k: f[k] for k in sorted(f.keys())}},
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()[:24]
+
+
+_VALID_CONTEXT_REFS = frozenset({"first", "second", "third", "last", "active"})
+
+
+def _normalize_context_ref(raw) -> Optional[str]:
+    if raw is None:
+        return None
+    s = str(raw).strip().lower()
+    if not s or s == "null":
+        return None
+    if s in _VALID_CONTEXT_REFS:
+        return s
+    return None
+
+
+def _resolve_context_ref_to_email_id(ctx: ConversationContext, ref: Optional[str]) -> Optional[str]:
+    ids = [str(x) for x in ctx.result_ids if x]
+    if not ids:
+        return None
+    if ref is None:
+        aid = (ctx.active_email_id or "").strip()
+        if aid and aid in ids:
+            return aid
+        return ids[0]
+    if ref == "first":
+        return ids[0]
+    if ref == "second":
+        return ids[1] if len(ids) > 1 else ids[0]
+    if ref == "third":
+        return ids[2] if len(ids) > 2 else ids[-1]
+    if ref == "last":
+        return ids[-1]
+    if ref == "active":
+        aid = (ctx.active_email_id or "").strip()
+        return aid if aid and aid in ids else ids[0]
+    return ids[0]
+
+
+def _context_matches_request(ctx: ConversationContext, top_k: int, filters: dict | None) -> bool:
+    if not ctx.search_key:
+        return False
+    return ctx.search_key == _conversation_search_key(top_k, filters)
+
+
+def _build_chat_context_dict(
+    mode: str,
+    results: list[dict],
+    active_email_id: Optional[str],
+    top_k: int,
+    filters: dict | None,
+) -> dict:
+    ids: list[str] = []
+    for r in results:
+        eid = r.get("id")
+        if eid and str(eid) not in ids:
+            ids.append(str(eid))
+    key = _conversation_search_key(top_k, filters)
+    active = (active_email_id or "").strip() or None
+    if active and active not in ids and ids:
+        active = ids[0]
+    elif not active and ids:
+        active = ids[0]
+    return {
+        "result_ids": ids,
+        "active_email_id": active,
+        "mode": mode,
+        "search_key": key,
+    }
+
+
+def _strip_email_for_api(doc: dict, score: float = 0.0) -> dict:
+    row = {
+        k: v
+        for k, v in doc.items()
+        if k not in ("embedding", "emb_subject", "emb_body", "owner_session", "_id")
+    }
+    row["score"] = score
+    return row
+
+
+async def _fetch_email_doc(db, session_id: str, email_id: str) -> Optional[dict]:
+    doc = await db["emails"].find_one(
+        {"id": email_id, "owner_session": session_id},
+        {"_id": 0, "embedding": 0, "emb_subject": 0, "emb_body": 0, "owner_session": 0},
+    )
+    return doc
+
+
+async def _fetch_emails_by_ids_ordered(
+    db, session_id: str, ids: list[str], *, score: float = 0.0
+) -> list[dict]:
+    out: list[dict] = []
+    for eid in ids:
+        if not eid:
+            continue
+        doc = await _fetch_email_doc(db, session_id, str(eid))
+        if doc:
+            out.append(_strip_email_for_api(doc, score=score))
+    return out
 
 
 class EventCreate(BaseModel):
@@ -757,10 +901,20 @@ def _latest_user_message(messages: list[ChatMessage]) -> str:
     return ""
 
 
-async def _semantic_search(query_text: str, top_k: int = 5, history: list[dict] | None = None, filters: dict | None = None) -> dict:
+async def _semantic_search(
+    query_text: str,
+    session_id: str,
+    top_k: int = 5,
+    history: list[dict] | None = None,
+    filters: dict | None = None,
+    intent: dict | None = None,
+) -> dict:
     db = get_db()
     try:
-        emails = await db["emails"].find({}, {"_id": 0}).to_list(length=1000)
+        emails = await db["emails"].find(
+            {"owner_session": session_id},
+            {"_id": 0, "owner_session": 0},
+        ).to_list(length=1000)
     except PyMongoError as e:
         raise HTTPException(
             status_code=503,
@@ -777,8 +931,8 @@ async def _semantic_search(query_text: str, top_k: int = 5, history: list[dict] 
         return {"results": [], "gmailAuthEmail": gmail_auth_email, "accounts": connected_accounts}
 
     try:
-        # Use Gemini to understand the query intent (with conversation history for follow-ups)
-        intent = understand_query(q, history=history)
+        if intent is None:
+            intent = understand_query(q, history=history)
 
         # If Gemini needs clarification, return the question without running a search
         if intent.get("needs_clarification"):
@@ -898,7 +1052,10 @@ async def _semantic_search(query_text: str, top_k: int = 5, history: list[dict] 
             row["score"] = round(float(scores[i]), 4)
             pre_results.append(row)
 
-        results = rerank(q, pre_results, top_k=top_k)
+        results = rerank(search_q, pre_results, top_k=top_k)
+        if logger.isEnabledFor(logging.DEBUG) and results:
+            tops = [round(float(x.get("score", 0)), 4) for x in results[:5]]
+            logger.debug("semantic_search pre_k=%s top_scores=%s", pre_k, tops)
         return {
             "results": results,
             "gmailAuthEmail": gmail_auth_email,
@@ -909,56 +1066,146 @@ async def _semantic_search(query_text: str, top_k: int = 5, history: list[dict] 
         raise HTTPException(status_code=500, detail=f"Search failed: {e}") from e
 
 
+async def _augment_email_body_for_llm(
+    db,
+    email_doc: dict,
+    passage_query: str,
+) -> tuple[dict, dict, dict]:
+    """Prefer persisted chunk embeddings; else sliding-window passage selection."""
+    raw = email_doc.get("body") or email_doc.get("snippet") or ""
+    chunk_text, cmeta = await merged_chunk_body_for_query(db, email_doc, passage_query)
+    if chunk_text:
+        pmeta = {
+            "raw_body_len": len(raw),
+            "sent_len": len(chunk_text),
+            "truncated_vs_raw": len(chunk_text) < len(raw),
+            "strategy": "chunk_embeddings",
+        }
+        return {**email_doc, "body": chunk_text}, pmeta, cmeta
+    body, pmeta = body_for_llm(raw, passage_query)
+    return {**email_doc, "body": body}, pmeta, cmeta
+
+
 @app.post("/ask")
-async def ask(req: QueryRequest):
-    return await _semantic_search(req.query, req.top_k)
+async def ask(req: QueryRequest, request: Request):
+    session_id = _require_session_id(request)
+    return await _semantic_search(req.query, session_id, top_k=req.top_k)
 
 
 @app.post("/chat")
-async def chat(req: ChatRequest):
+async def chat(req: ChatRequest, request: Request):
+    session_id = _require_session_id(request)
     query_text = _latest_user_message(req.messages)
     if not query_text:
         raise HTTPException(status_code=400, detail="Add at least one user message with text.")
 
     history = [{"role": m.role, "content": m.content} for m in req.messages[:-1]]
     filters = req.filters.model_dump() if req.filters else None
+    prior_ok = req.context is not None and _context_matches_request(
+        req.context, req.top_k, filters
+    )
 
-    # Step 1: understand intent + detect mode
+    db = get_db()
+    gmail_auth_email = await _get_stored_gmail_address(db)
+    connected_accounts = await _list_connected_emails(db)
+
     intent = understand_query(query_text, history=history)
 
     if intent.get("needs_clarification"):
+        ctx_out = req.context.model_dump() if prior_ok else None
         return {
             "reply": intent.get("clarifying_question", "Could you give me more details?"),
             "mode": "clarify",
             "results": [],
             "intent": intent,
             "clarification": intent.get("clarifying_question"),
+            "gmailAuthEmail": gmail_auth_email,
+            "accounts": connected_accounts,
+            "context": ctx_out,
         }
 
     mode = intent.get("mode") or "find"
+    uses_prior = bool(intent.get("uses_prior_context"))
+    context_ref = _normalize_context_ref(intent.get("context_ref"))
 
-    # chitchat: no search needed
     if mode == "chitchat":
         resp = agent_chitchat(query_text, conversation=history)
-        return {"reply": resp.reply, "mode": resp.mode, "results": [], "intent": intent}
+        ctx_out = req.context.model_dump() if prior_ok else None
+        return {
+            "reply": resp.reply,
+            "mode": resp.mode,
+            "results": [],
+            "intent": intent,
+            "gmailAuthEmail": gmail_auth_email,
+            "accounts": connected_accounts,
+            "clarification": None,
+            "context": ctx_out,
+        }
 
-    # Step 2: hybrid search to get candidates (used by find/answer/summarize/extract)
-    search_result = await _semantic_search(query_text, req.top_k, history=history, filters=filters)
-    candidates = search_result.get("results", [])
-    gmail_auth_email = search_result.get("gmailAuthEmail")
-    connected_accounts = search_result.get("accounts", [])
+    candidates: list[dict] = []
+    preloaded_email: Optional[dict] = None
 
-    # Step 3: route by mode
+    if mode in ("find", "summarize"):
+        search_result = await _semantic_search(
+            query_text,
+            session_id,
+            req.top_k,
+            history=history,
+            filters=filters,
+            intent=intent,
+        )
+        candidates = list(search_result.get("results") or [])
+        gmail_auth_email = search_result.get("gmailAuthEmail", gmail_auth_email)
+        connected_accounts = list(search_result.get("accounts") or connected_accounts)
+
+    elif mode in ("answer", "extract"):
+        prior_path = bool(uses_prior and prior_ok and req.context is not None)
+        if prior_path:
+            tid = (req.active_email_id or "").strip() or None
+            if not tid:
+                tid = _resolve_context_ref_to_email_id(req.context, context_ref)
+            if tid:
+                preloaded_email = await _fetch_email_doc(db, session_id, tid)
+            id_slice = list(req.context.result_ids)[: req.top_k]
+            candidates = await _fetch_emails_by_ids_ordered(db, session_id, id_slice, score=0.0)
+            if not preloaded_email:
+                prior_path = False
+        if not prior_path:
+            search_result = await _semantic_search(
+                query_text,
+                session_id,
+                req.top_k,
+                history=history,
+                filters=filters,
+                intent=intent,
+            )
+            candidates = list(search_result.get("results") or [])
+            gmail_auth_email = search_result.get("gmailAuthEmail", gmail_auth_email)
+            connected_accounts = list(search_result.get("accounts") or connected_accounts)
+            preloaded_email = None
+    else:
+        search_result = await _semantic_search(
+            query_text,
+            session_id,
+            req.top_k,
+            history=history,
+            filters=filters,
+            intent=intent,
+        )
+        candidates = list(search_result.get("results") or [])
+        gmail_auth_email = search_result.get("gmailAuthEmail", gmail_auth_email)
+        connected_accounts = list(search_result.get("accounts") or connected_accounts)
+
     if mode == "answer":
-        # Use active_email_id if provided (email open in reader), else top search result
-        db = get_db()
         email_doc = None
-        if req.active_email_id:
-            email_doc = await db["emails"].find_one({"id": req.active_email_id}, {"_id": 0})
+        if (req.active_email_id or "").strip():
+            email_doc = await _fetch_email_doc(db, session_id, req.active_email_id.strip())
+        if not email_doc and preloaded_email:
+            email_doc = preloaded_email
         if not email_doc and candidates:
             top_id = candidates[0].get("id")
             if top_id:
-                email_doc = await db["emails"].find_one({"id": top_id}, {"_id": 0})
+                email_doc = await _fetch_email_doc(db, session_id, str(top_id))
             if not email_doc:
                 email_doc = candidates[0]
         if not email_doc:
@@ -967,29 +1214,63 @@ async def chat(req: ChatRequest):
                 "mode": mode,
                 "results": [],
                 "intent": intent,
+                "gmailAuthEmail": gmail_auth_email,
+                "accounts": connected_accounts,
+                "clarification": None,
+                "context": _build_chat_context_dict(mode, [], None, req.top_k, filters),
             }
-        resp = agent_answer(query_text, email_doc, conversation=history)
+        top_score = float(candidates[0].get("score", 0)) if candidates else None
+        email_llm, pmeta, cmeta = await _augment_email_body_for_llm(db, email_doc, query_text)
+        log_rag_passage_context(
+            "answer",
+            str(email_doc.get("id")),
+            pmeta,
+            top_retrieval_score=top_score,
+            chunk_meta=cmeta,
+        )
+        resp = agent_answer(query_text, email_llm, conversation=history)
+        active_id = email_doc.get("id")
+        if uses_prior and prior_ok and req.context is not None:
+            ctx_dict = {
+                "result_ids": list(req.context.result_ids),
+                "active_email_id": active_id,
+                "mode": "answer",
+                "search_key": _conversation_search_key(req.top_k, filters),
+            }
+        else:
+            ctx_dict = _build_chat_context_dict("answer", candidates, active_id, req.top_k, filters)
 
     elif mode == "summarize":
-        # Summarize top candidates (or the active email if open)
         emails_to_summarize = candidates[:5]
-        if req.active_email_id and not emails_to_summarize:
-            db = get_db()
-            doc = await db["emails"].find_one({"id": req.active_email_id}, {"_id": 0})
+        if (req.active_email_id or "").strip() and not emails_to_summarize:
+            doc = await _fetch_email_doc(db, session_id, req.active_email_id.strip())
             if doc:
                 emails_to_summarize = [doc]
+        max_raw = (
+            max(len(e.get("body") or "") for e in emails_to_summarize)
+            if emails_to_summarize
+            else 0
+        )
+        logger.info(
+            "rag_context mode=summarize email_count=%s max_raw_body_len=%s",
+            len(emails_to_summarize),
+            max_raw,
+        )
         resp = agent_summarize(emails_to_summarize, query_text)
+        active_id = resp.results[0].get("id") if resp.results else None
+        ctx_dict = _build_chat_context_dict("summarize", candidates, active_id, req.top_k, filters)
 
     elif mode == "extract":
         extract_field = intent.get("extract_field") or "information"
-        db = get_db()
         email_doc = None
-        if req.active_email_id:
-            email_doc = await db["emails"].find_one({"id": req.active_email_id}, {"_id": 0})
+        if (req.active_email_id or "").strip():
+            email_doc = await _fetch_email_doc(db, session_id, req.active_email_id.strip())
+        if not email_doc and preloaded_email:
+            email_doc = preloaded_email
         if not email_doc and candidates:
             top_id = candidates[0].get("id")
             if top_id:
-                email_doc = await db["emails"].find_one({"id": top_id}, {"_id": 0})
+                email_doc = await _fetch_email_doc(db, session_id, str(top_id))
             if not email_doc:
                 email_doc = candidates[0]
         if not email_doc:
@@ -998,11 +1279,37 @@ async def chat(req: ChatRequest):
                 "mode": mode,
                 "results": [],
                 "intent": intent,
+                "gmailAuthEmail": gmail_auth_email,
+                "accounts": connected_accounts,
+                "clarification": None,
+                "context": _build_chat_context_dict(mode, [], None, req.top_k, filters),
             }
-        resp = agent_extract(extract_field, email_doc)
+        passage_q = f"{extract_field} {query_text}"
+        top_score = float(candidates[0].get("score", 0)) if candidates else None
+        email_llm, pmeta, cmeta = await _augment_email_body_for_llm(db, email_doc, passage_q)
+        log_rag_passage_context(
+            "extract",
+            str(email_doc.get("id")),
+            pmeta,
+            top_retrieval_score=top_score,
+            chunk_meta=cmeta,
+        )
+        resp = agent_extract(extract_field, email_llm)
+        active_id = email_doc.get("id")
+        if uses_prior and prior_ok and req.context is not None:
+            ctx_dict = {
+                "result_ids": list(req.context.result_ids),
+                "active_email_id": active_id,
+                "mode": "extract",
+                "search_key": _conversation_search_key(req.top_k, filters),
+            }
+        else:
+            ctx_dict = _build_chat_context_dict("extract", candidates, active_id, req.top_k, filters)
 
-    else:  # mode == "find" (default)
+    else:
         resp = agent_find(query_text, candidates, conversation=history)
+        first_id = resp.results[0].get("id") if resp.results else None
+        ctx_dict = _build_chat_context_dict("find", resp.results, first_id, req.top_k, filters)
 
     return {
         "reply": resp.reply,
@@ -1012,6 +1319,7 @@ async def chat(req: ChatRequest):
         "gmailAuthEmail": gmail_auth_email,
         "accounts": connected_accounts,
         "clarification": None,
+        "context": ctx_dict,
     }
 
 
@@ -1220,6 +1528,7 @@ async def _sync_account_bulk(db, account_email: str, creds: Credentials, max_res
         if emails:
             ops = [UpdateOne({"id": e["id"]}, {"$set": e}, upsert=True) for e in emails]
             await db["emails"].bulk_write(ops, ordered=False)
+            await rebuild_chunks_for_emails(db, emails)
         await _set_account_last_sync(db, account_email, int(time.time()))
     except PyMongoError as e:
         raise HTTPException(
@@ -1285,16 +1594,21 @@ async def sync_emails():
 
 
 @app.post("/emails/seed")
-async def seed_emails():
+async def seed_emails(request: Request):
     """Load mock emails into MongoDB (run once to populate)."""
     db = get_db()
+    session_id = _require_session_id(request)
     path = Path(__file__).parent / "emails.json"
     emails = json.loads(path.read_text())
+    for e in emails:
+        e["owner_session"] = session_id
     add_embeddings_inplace(emails)
     assign_labels_bulk(emails)
     try:
-        await db["emails"].delete_many({})
+        await db["email_chunks"].delete_many({"ingest_key": session_id})
+        await db["emails"].delete_many({"owner_session": session_id})
         await db["emails"].insert_many(emails)
+        await rebuild_chunks_for_emails(db, emails)
         await db["settings"].delete_one({"_id": SETTINGS_DOC_ID})
         await db["settings"].delete_one({"_id": ACCOUNTS_DOC_ID})
     except PyMongoError as e:
