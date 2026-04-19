@@ -13,7 +13,8 @@ backend/env/
 
 # Node
 node_modules/
-extension/node_modules/
+
+# Optional stray build output (e.g. old tooling)
 dist/
 
 # Misc

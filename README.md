@@ -1,13 +1,12 @@
 # mail-sherlock
 
-Semantic search over email: a **FastAPI** backend (embeddings + MongoDB) and a **Chrome extension** popup that calls `http://localhost:8000`.
+Semantic search over email: a **FastAPI** backend (embeddings + MongoDB) and a **React web UI** (`web/`) that talks to the API—either via Vite dev proxy or after building into `backend/static/` for production.
 
 ## Prerequisites
 
 - **Python 3.10+** (3.11 recommended)
 - **Node.js 18+** and npm
 - **MongoDB** reachable from your machine ([MongoDB Atlas](https://www.mongodb.com/atlas) or local)
-- **Google Chrome** (for the extension)
 
 ## 1. Backend
 
@@ -27,6 +26,13 @@ MONGODB_URI=mongodb+srv://USER:PASS@cluster.example.mongodb.net/?appName=your-ap
 DB_MAIL=mail_sherlock
 ```
 
+**Force local MongoDB** (ignores `MONGODB_URI` — use with `docker compose` when Atlas TLS fails on your machine):
+
+```env
+MONGODB_USE_LOCAL=1
+# optional: MONGODB_LOCAL_URI=mongodb://127.0.0.1:27017
+```
+
 **Local MongoDB (recommended when Atlas TLS fails on your PC):** from the **repo root** (with [Docker Desktop](https://www.docker.com/products/docker-desktop/) running):
 
 ```bash
@@ -37,7 +43,7 @@ Then in `backend/.env` use `MONGODB_URI=mongodb://127.0.0.1:27017` (the repo’s
 
 If `docker compose` errors about `dockerDesktopLinuxEngine`, start **Docker Desktop** and wait until it is fully up, then run `docker compose up -d` again.
 
-If `MONGODB_URI` is missing, the app falls back to a default in code—prefer setting your own URI and **do not commit secrets**.
+If `MONGODB_URI` is missing, the app uses **`mongodb://127.0.0.1:27017`** (local MongoDB). Prefer setting your own URI for Atlas/production and **do not commit secrets**.
 
 **Gmail (optional):** put the Google OAuth client JSON in `backend/credentials.json` (see **Real Gmail** below).
 
@@ -75,7 +81,7 @@ API base: **http://localhost:8000**
    Invoke-RestMethod -Uri "http://127.0.0.1:8000/emails/sync" -Method POST
    ```
 
-   Expect `synced` with a number (up to **500** latest messages per sync). Search then uses **your** mail; extension **Open in Gmail** links work when `threadId` is stored.
+   Expect `synced` with a number (up to **500** latest messages per sync). Search then uses **your** mail; **Open in Gmail** links in the UI work when `threadId` is stored.
 
 If sync returns **401**, do step 6 again. If **login** returns **500** about missing credentials, add `credentials.json`. If Google shows **redirect_uri_mismatch**, fix the URI in Cloud Console to match step 2 exactly.
 
@@ -102,54 +108,67 @@ First run downloads the sentence-transformer model (~90MB+); startup can take a 
 
 **Search speed:** Each email’s embedding is computed **once** when you **`POST /emails/seed`** or **`POST /emails/sync`** and stored in MongoDB. **`POST /ask`** then only encodes your query, so search is much faster than re-encoding every message each time. Re-run seed/sync after upgrading this logic so stored docs include `embedding`.
 
-## 2. Chrome extension
+## 2. Web UI
+
+**Development** (hot reload; API proxied to the backend on port 8000):
 
 ```bash
-cd extension
+cd web
+npm install
+npm run dev
+```
+
+Open the URL Vite prints (usually **`http://localhost:5173`**). Keep **`python main.py`** (or uvicorn) running on **8000** so the proxy can reach the API.
+
+**Production-style** (bundle served by FastAPI from `backend/static/`):
+
+```bash
+cd web
 npm install
 npm run build
 ```
 
-This writes the unpacked extension to **`dist/`** at the repo root (see `vite.config.ts`).
-
-**Load in Chrome:**
-
-1. Open `chrome://extensions`
-2. Enable **Developer mode**
-3. **Load unpacked** → choose the **`dist`** folder inside this repo (`mail-sherlock/dist`)
-
-The popup talks to the backend at **`http://127.0.0.1:8000`** (see `src/api/search.ts`). Keep the Python server running while you use the extension. After changing API URLs or `manifest.json`, run **`npm run build`** again and click **Reload** on the extension in `chrome://extensions`.
+Then start the backend and use **`http://localhost:8000/`** as usual—the landing and app assets come from `backend/static/`.
 
 ## 3. Use it
 
-1. Backend running on port **8000**
-2. Extension loaded from **`dist`**
-3. Click the extension icon, type a natural-language query, **Search**
+1. Backend running on port **8000** (and web UI via **`npm run dev`** or a fresh **`npm run build`** as above).
+2. Open the app in your browser and run a natural-language search.
 
-After **Gmail sync**, search responses include **`gmailAuthEmail`** (the address that completed OAuth). **Open in Gmail** uses Google’s `authuser=` with that address so the correct account opens—not Chrome’s default `/u/0` slot. Mock **seed** clears the stored address; sync again to restore links.
+After **Gmail sync**, search responses include **`gmailAuthEmail`** (the address that completed OAuth in your browser session). **Open in Gmail** uses Google’s `authuser=` with that address so the correct account opens—not the default `/u/0` slot. Mock **seed** clears the stored address for that same session; sync again to restore links.
+
+### Multi-user privacy on a shared backend
+
+If you deploy one backend for multiple people (for example on EC2), mail-sherlock now isolates data by a per-browser session cookie:
+
+- OAuth token storage is scoped to the session.
+- Synced emails are tagged with the session owner and only searchable by that session.
+- `gmailAuthEmail` is returned from the current session only.
+
+This prevents one user from seeing another user’s connected Gmail address or indexed email results.
 
 ## Project layout
 
 ```
-backend/          FastAPI, embeddings, Gmail sync, MongoDB
-extension/        React + Vite → builds to ../dist
-dist/             Load this folder in Chrome (after npm run build)
+backend/          FastAPI, embeddings, Gmail sync, MongoDB; serves built web from static/
+web/              React + Vite → production build writes to backend/static/
 instruction.md    Planned features (hybrid search, chat, etc.)
 ```
 
 ## Troubleshooting
 
-### “Could not reach the backend” / HTTP 503 in the popup
+### “Could not reach the backend” / HTTP 503 in the browser
 
-The extension used to show that message for **any** failure (including HTTP 500/503). It now shows the **real error text** from the API.
+If the UI shows a connection or HTTP error, check the **real error text** from the API response and the browser devtools **Network** tab.
 
 - **MongoDB / TLS (`TLSV1_ALERT_INTERNAL_ERROR`, `SSL handshake failed`, 503):** The API is up but the driver cannot complete TLS to Atlas. Try in order:
-  1. **`pip install -r requirements.txt`** again (the app uses **Certifi** as `tlsCAFile`, which fixes many Windows/Python CA issues).
-  2. **Restart** `python main.py` after upgrading deps.
-  3. **VPN / corporate network / antivirus “HTTPS scanning”** — try another network or disable SSL inspection for Python briefly to confirm.
-  4. **Newer Python** (3.11+) if you are on an old 3.10 build with an outdated OpenSSL.
-  5. **Last resort (local dev only):** in `backend/.env` set `MONGODB_TLS_INSECURE=true` — relaxes TLS verification (**unsafe**; do not use for real data or production).
-  6. **Local MongoDB:** `MONGODB_URI=mongodb://127.0.0.1:27017` (no Atlas TLS path).
+  1. **Local MongoDB:** `docker compose up -d` from the repo root, then in `backend/.env` set **`MONGODB_USE_LOCAL=1`** (or `MONGODB_URI=mongodb://127.0.0.1:27017`) and restart the API — bypasses Atlas TLS entirely.
+  2. **TLS knobs (Atlas only):** in `backend/.env` try `MONGODB_TLS_DISABLE_OCSP=1`, then add `MONGODB_TLS_DISABLE_CRL=1`, then `MONGODB_FORCE_IPV4=1` (restart after each). Optional custom CA: `MONGODB_TLS_CA_FILE=C:\\path\\to\\corp-ca.pem`.
+  3. **`pip install -r requirements.txt`** again (the app uses **Certifi** as `tlsCAFile`, which fixes many Windows/Python CA issues).
+  4. **Restart** `python main.py` after upgrading deps.
+  5. **VPN / corporate network / antivirus “HTTPS scanning”** — try another network or disable SSL inspection for Python briefly to confirm.
+  6. **Newer Python** (3.11+) if you are on an old 3.10 build with an outdated OpenSSL.
+  7. **Last resort (local dev only):** `MONGODB_TLS_INSECURE=true` — relaxes TLS verification (**unsafe**; do not use for real data or production).
 
   Check: `GET http://127.0.0.1:8000/health` should return `{"ok":true,"database":"up"}` when the DB is reachable.
 
@@ -171,6 +190,6 @@ With **`uvicorn --reload`** (or `python main.py` when it enables reload), each r
 
 Harmless when loading `all-MiniLM-L6-v2` on some stacks; it does **not** mean the HTTP server failed.
 
-### Extension changes not applying
+### Web UI changes not applying
 
-Rebuild (`npm run build`) and **Reload** the unpacked extension in Chrome.
+After `npm run build`, restart the backend if needed so it picks up new files under `backend/static/`. In dev, Vite reloads automatically.

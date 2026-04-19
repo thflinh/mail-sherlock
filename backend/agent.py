@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 
 import google.genai as genai
 
+from passage_select import body_for_llm
+
 logger = logging.getLogger(__name__)
 
 _api_key = os.environ.get("GEMINI_API_KEY", "")
@@ -134,7 +136,8 @@ def answer(
     email: dict,
     conversation: list[dict] | None = None,
 ) -> AgentResponse:
-    body = (email.get("body") or email.get("snippet") or "")[:5000]
+    # Body may already be passage- or chunk-augmented in main._augment_email_body_for_llm
+    body = (email.get("body") or email.get("snippet") or "")[:8000]
     user_prompt = (
         f"Email from: {email.get('sender','')}\n"
         f"Subject: {email.get('subject','')}\n"
@@ -171,7 +174,8 @@ def summarize(
 
     blocks = []
     for i, e in enumerate(sorted(emails, key=lambda x: x.get("date", ""))):
-        body = (e.get("body") or e.get("snippet") or "")[:2000]
+        raw = e.get("body") or e.get("snippet") or ""
+        body, _ = body_for_llm(raw, user_request, max_chars=2400)
         blocks.append(
             f"--- Email {i+1} ---\n"
             f"From: {e.get('sender','')}\n"
@@ -200,7 +204,7 @@ def extract(
     extract_field: str,
     email: dict,
 ) -> AgentResponse:
-    body = (email.get("body") or email.get("snippet") or "")[:5000]
+    body = (email.get("body") or email.get("snippet") or "")[:8000]
     user_prompt = (
         f"Extract: {extract_field}\n\n"
         f"Email:\n"
