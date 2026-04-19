@@ -719,7 +719,9 @@ async def auth_login(request: Request, token: Optional[str] = None):
     )
     _flows[state] = {"flow": flow, "session_id": session_id}
     resp = RedirectResponse(auth_url)
-    if not existing:
+    # Always stamp the cookie with the resolved session_id so /auth/callback can verify it.
+    # When using token auth, session_id is user_id; the cookie carries it through the redirect.
+    if _session_id_from_request(request) != session_id:
         _attach_session_cookie(request, resp, session_id)
     return resp
 
