@@ -209,17 +209,20 @@ async def _ensure_accounts_migrated(db) -> None:
         pass
 
 
-async def _get_gmail_account_rows(db) -> list[dict]:
+async def _get_gmail_account_rows(db, session_id: Optional[str] = None) -> list[dict]:
     await _ensure_accounts_migrated(db)
     doc = await db["settings"].find_one({"_id": ACCOUNTS_DOC_ID})
     rows = doc.get("accounts") if doc else None
     if not isinstance(rows, list):
         return []
-    return [r for r in rows if isinstance(r, dict) and r.get("token_json")]
+    valid = [r for r in rows if isinstance(r, dict) and r.get("token_json")]
+    if session_id:
+        return [r for r in valid if r.get("session_id") == session_id]
+    return valid
 
 
-async def _list_connected_emails(db) -> list[str]:
-    rows = await _get_gmail_account_rows(db)
+async def _list_connected_emails(db, session_id: Optional[str] = None) -> list[str]:
+    rows = await _get_gmail_account_rows(db, session_id=session_id)
     out = []
     for r in rows:
         e = (r.get("email") or "").strip()
@@ -228,7 +231,7 @@ async def _list_connected_emails(db) -> list[str]:
     return out
 
 
-async def _upsert_gmail_account(db, email: str, creds: Credentials) -> None:
+async def _upsert_gmail_account(db, email: str, creds: Credentials, session_id: Optional[str] = None) -> None:
     email = (email or "").strip()
     if not email:
         raise ValueError("missing email")
@@ -240,13 +243,15 @@ async def _upsert_gmail_account(db, email: str, creds: Credentials) -> None:
     replaced = False
     new_rows = []
     for r in rows:
-        if isinstance(r, dict) and (r.get("email") or "").strip() == email:
-            new_rows.append({**r, "email": email, "token_json": creds.to_json()})
+        row_email = (r.get("email") or "").strip()
+        row_session = r.get("session_id")
+        if isinstance(r, dict) and row_email == email and row_session == session_id:
+            new_rows.append({**r, "email": email, "token_json": creds.to_json(), "session_id": session_id})
             replaced = True
         else:
             new_rows.append(r)
     if not replaced:
-        new_rows.append({"email": email, "token_json": creds.to_json(), "last_sync_at": None})
+        new_rows.append({"email": email, "token_json": creds.to_json(), "last_sync_at": None, "session_id": session_id})
     await db["settings"].update_one(
         {"_id": ACCOUNTS_DOC_ID},
         {"$set": {"accounts": new_rows}},
@@ -501,14 +506,16 @@ def ready():
 
 
 @app.get("/status")
-async def app_status(response: Response):
+async def app_status(request: Request, response: Response):
     """Returns auth state and email count so the frontend knows what setup step the user is on."""
     response.headers["Cache-Control"] = "no-store"
+    session_id = _session_id_from_request(request)
     db = get_db()
-    accounts = await _list_connected_emails(db)
-    gmail_auth_email = accounts[0] if accounts else await _get_stored_gmail_address(db)
+    accounts = await _list_connected_emails(db, session_id=session_id)
+    gmail_auth_email = accounts[0] if accounts else None
     try:
-        email_count = await db["emails"].count_documents({})
+        query = {"owner_session": session_id} if session_id else {"owner_session": {"$exists": False}}
+        email_count = await db["emails"].count_documents(query)
     except PyMongoError:
         email_count = 0
     return {
@@ -721,7 +728,7 @@ async def auth_callback(
         addr = (profile.get("emailAddress") or "").strip()
         if not addr:
             return _oauth_error_html("Could not read your Gmail address from Google.", status_code=500)
-        await _upsert_gmail_account(get_db(), addr, creds)
+        await _upsert_gmail_account(get_db(), addr, creds, session_id=flow_session_id)
     except Exception as e:
         logger.error("Failed to save OAuth token: %s", e)
         return _oauth_error_html(f"Authenticated but could not save credentials: {e}", status_code=500)
@@ -1480,7 +1487,7 @@ def _extract_body(payload: dict) -> str:
     return ""
 
 
-async def _sync_account_bulk(db, account_email: str, creds: Credentials, max_results: int = 2000, incremental: bool = False) -> int:
+async def _sync_account_bulk(db, account_email: str, creds: Credentials, max_results: int = 2000, incremental: bool = False, owner_session: Optional[str] = None) -> int:
     """Fetch new messages for one Gmail account and upsert into MongoDB.
 
     When incremental=True (background auto-sync), the after: date filter is applied
@@ -1514,9 +1521,12 @@ async def _sync_account_bulk(db, account_email: str, creds: Credentials, max_res
                 break
 
     # Load already-indexed IDs upfront so we can skip them per page.
+    id_filter: dict = {"accountEmail": account_email}
+    if owner_session:
+        id_filter["owner_session"] = owner_session
     existing_ids: set[str] = {
         d["id"]
-        async for d in db["emails"].find({"accountEmail": account_email}, {"id": 1, "_id": 0})
+        async for d in db["emails"].find(id_filter, {"id": 1, "_id": 0})
     }
 
     # Each worker thread gets its own service instance (googleapiclient is not
@@ -1574,11 +1584,14 @@ async def _sync_account_bulk(db, account_email: str, creds: Credentials, max_res
             detail=f"Gmail API error ({account_email}): {e.reason}",
         ) from e
 
+    if owner_session:
+        for e in emails:
+            e["owner_session"] = owner_session
     add_embeddings_inplace(emails)
     assign_labels_bulk(emails)
     try:
         if emails:
-            ops = [UpdateOne({"id": e["id"]}, {"$set": e}, upsert=True) for e in emails]
+            ops = [UpdateOne({"id": e["id"], "owner_session": owner_session}, {"$set": e}, upsert=True) for e in emails]
             await db["emails"].bulk_write(ops, ordered=False)
             await rebuild_chunks_for_emails(db, emails)
         await _set_account_last_sync(db, account_email, int(time.time()))
@@ -1592,10 +1605,11 @@ async def _sync_account_bulk(db, account_email: str, creds: Credentials, max_res
 
 
 @app.post("/emails/sync")
-async def sync_emails():
+async def sync_emails(request: Request, response: Response):
     """Fetch new emails from Gmail for every connected account and upsert into MongoDB."""
+    session_id = _require_session_id(request, response)
     db = get_db()
-    rows = await _get_gmail_account_rows(db)
+    rows = await _get_gmail_account_rows(db, session_id=session_id)
     if not rows:
         raise HTTPException(
             status_code=401,
@@ -1615,7 +1629,7 @@ async def sync_emails():
             last_error = f"Missing credentials for {email}"
             continue
         account_emails.append(email)
-        tasks.append(_sync_account_bulk(db, email, creds, max_results=1000))
+        tasks.append(_sync_account_bulk(db, email, creds, max_results=1000, owner_session=session_id))
 
     # Run all account syncs concurrently instead of sequentially.
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -1630,8 +1644,8 @@ async def sync_emails():
             synced_total += result
             per_account[email] = result
 
-    total = await db["emails"].count_documents({})
-    accounts = await _list_connected_emails(db)
+    total = await db["emails"].count_documents({"owner_session": session_id})
+    accounts = await _list_connected_emails(db, session_id=session_id)
     primary = accounts[0] if accounts else None
     if synced_total == 0 and per_account == {} and last_error:
         raise HTTPException(status_code=502, detail=last_error)
