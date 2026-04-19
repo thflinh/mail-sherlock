@@ -22,7 +22,6 @@ import base64
 import concurrent.futures
 import hashlib
 import logging
-import secrets
 import time
 import threading
 from datetime import datetime, timedelta, timezone
@@ -59,6 +58,51 @@ ACCOUNTS_DOC_ID = "gmail_accounts"
 LANDING_FILE = Path(__file__).parent / "static" / "index.html"
 OAUTH_SUCCESS_FILE = Path(__file__).parent / "static" / "oauth_success.html"
 OAUTH_ERROR_FILE = Path(__file__).parent / "static" / "oauth_error.html"
+
+OWNER_SESSION_COOKIE = os.getenv("OWNER_SESSION_COOKIE", "ms_owner_session")
+SESSION_COOKIE_MAX_AGE = int(os.getenv("SESSION_COOKIE_MAX_AGE", str(60 * 60 * 24 * 400)))
+
+
+def _token_doc_id(session_id: str) -> str:
+    """Mongo settings._id for OAuth token JSON scoped to a browser session."""
+    sid = (session_id or "").strip()
+    if not sid:
+        return TOKEN_DOC_ID
+    return f"{TOKEN_DOC_ID}:{sid}"
+
+
+def _new_session_id() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def _session_id_from_request(request: Request) -> Optional[str]:
+    raw = request.cookies.get(OWNER_SESSION_COOKIE)
+    if raw and str(raw).strip():
+        return str(raw).strip()
+    return None
+
+
+def _attach_session_cookie(request: Request, response: Response, session_id: str) -> None:
+    secure = request.url.scheme == "https"
+    response.set_cookie(
+        key=OWNER_SESSION_COOKIE,
+        value=session_id,
+        max_age=SESSION_COOKIE_MAX_AGE,
+        httponly=True,
+        samesite="lax",
+        path="/",
+        secure=secure,
+    )
+
+
+def _require_session_id(request: Request, response: Response) -> str:
+    """Stable per-browser scope for email rows; mint id and Set-Cookie when missing."""
+    existing = _session_id_from_request(request)
+    if existing:
+        return existing
+    sid = _new_session_id()
+    _attach_session_cookie(request, response, sid)
+    return sid
 
 
 def _gmail_list_query_after_epoch(last_sync_at: Optional[int]) -> str:
@@ -615,7 +659,8 @@ def auth_login(request: Request):
         config = _load_credentials_config()
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
-    session_id = _session_id_from_request(request) or _new_session_id()
+    existing = _session_id_from_request(request)
+    session_id = existing or _new_session_id()
     flow = Flow.from_client_config(
         config,
         scopes=SCOPES,
@@ -627,8 +672,11 @@ def auth_login(request: Request):
         prompt="select_account consent",
         access_type="offline",
     )
-    _flows[state] = flow
-    return RedirectResponse(auth_url)
+    _flows[state] = {"flow": flow, "session_id": session_id}
+    resp = RedirectResponse(auth_url)
+    if not existing:
+        _attach_session_cookie(request, resp, session_id)
+    return resp
 
 
 @app.get("/auth/callback")
@@ -649,8 +697,12 @@ async def auth_callback(
             "The sign-in session expired (for example the API restarted). "
             "Go to http://localhost:8000/auth/login and try again.",
         )
+    if not isinstance(saved, dict) or "flow" not in saved:
+        return _oauth_error_html(
+            "Invalid OAuth state. Go to http://localhost:8000/auth/login and try again.",
+        )
     flow = saved["flow"]
-    flow_session_id = saved["session_id"]
+    flow_session_id = saved.get("session_id") or ""
     cookie_session_id = _session_id_from_request(request)
     if not cookie_session_id or cookie_session_id != flow_session_id:
         return _oauth_error_html(
@@ -1087,14 +1139,14 @@ async def _augment_email_body_for_llm(
 
 
 @app.post("/ask")
-async def ask(req: QueryRequest, request: Request):
-    session_id = _require_session_id(request)
+async def ask(req: QueryRequest, request: Request, response: Response):
+    session_id = _require_session_id(request, response)
     return await _semantic_search(req.query, session_id, top_k=req.top_k)
 
 
 @app.post("/chat")
-async def chat(req: ChatRequest, request: Request):
-    session_id = _require_session_id(request)
+async def chat(req: ChatRequest, request: Request, response: Response):
+    session_id = _require_session_id(request, response)
     query_text = _latest_user_message(req.messages)
     if not query_text:
         raise HTTPException(status_code=400, detail="Add at least one user message with text.")
@@ -1594,10 +1646,10 @@ async def sync_emails():
 
 
 @app.post("/emails/seed")
-async def seed_emails(request: Request):
+async def seed_emails(request: Request, response: Response):
     """Load mock emails into MongoDB (run once to populate)."""
     db = get_db()
-    session_id = _require_session_id(request)
+    session_id = _require_session_id(request, response)
     path = Path(__file__).parent / "emails.json"
     emails = json.loads(path.read_text())
     for e in emails:
