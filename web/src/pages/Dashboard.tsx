@@ -1036,9 +1036,11 @@ export default function Dashboard({ navigate }: Props) {
 
               <div className="db-reader-body">
                 {readerEmail.bodyHtml ? (
-                  <div
-                    className="db-reader-html"
-                    dangerouslySetInnerHTML={{ __html: readerEmail.bodyHtml }}
+                  <iframe
+                    className="db-reader-iframe"
+                    srcDoc={`<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{margin:12px;font-family:system-ui,sans-serif;font-size:13px;line-height:1.6;color:#111;word-break:break-word;}img{max-width:100%;height:auto;}a{color:#4f46e5;}table{border-collapse:collapse;width:100%;font-size:12px;}td,th{border:0.5px solid #ddd;padding:4px 8px;}blockquote{border-left:3px solid #ccc;margin:8px 0;padding:4px 12px;color:#555;}</style></head><body>${readerEmail.bodyHtml}</body></html>`}
+                    sandbox="allow-same-origin allow-popups"
+                    title="Email content"
                   />
                 ) : (
                   <pre className="db-reader-text">{readerEmail.bodyText || readerEmail.snippet}</pre>

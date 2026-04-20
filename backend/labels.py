@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 _api_key = os.environ.get("GEMINI_API_KEY", "")
 _client = genai.Client(api_key=_api_key) if _api_key else None
-_MODEL = "gemini-2.5-flash"
+_MODEL = "gemini-2.5-flash-lite"
 
 # ── Rule-based matching ───────────────────────────────────────────────────────
 
@@ -137,7 +137,54 @@ def assign_labels(email: dict, custom_rules: dict[str, list[str]] | None = None)
     return matched
 
 
+def _gemini_classify_batch(emails: list[dict]) -> list[list[str]]:
+    """Classify a batch of emails in a single Gemini call. Returns one label list per email."""
+    if not _client or not emails:
+        return [[] for _ in emails]
+
+    lines = []
+    for i, e in enumerate(emails):
+        lines.append(
+            f"[{i}] Sender: {e.get('sender','')} | Subject: {e.get('subject','')} | "
+            f"Preview: {(e.get('snippet') or e.get('body') or '')[:200]}"
+        )
+
+    prompt = "\n".join(lines) + (
+        f"\n\nFor each item [0]–[{len(emails)-1}], assign labels from {_GEMINI_LABELS}. "
+        "Return a JSON array of arrays, one per item. Example: [[\"finance\"],[],[\"work\",\"finance\"]]"
+    )
+
+    try:
+        resp = _client.models.generate_content(
+            model=_MODEL,
+            contents=prompt,
+            config={"temperature": 0, "max_output_tokens": 1024, "system_instruction": _CLASSIFY_SYSTEM},
+        )
+        import json, re
+        text = re.sub(r"^```(?:json)?\s*", "", (resp.text or "").strip())
+        text = re.sub(r"\s*```$", "", text)
+        result = json.loads(text)
+        if isinstance(result, list) and len(result) == len(emails):
+            return [
+                [lb for lb in item if lb in _GEMINI_LABELS] if isinstance(item, list) else []
+                for item in result
+            ]
+    except Exception as exc:
+        logger.debug("Gemini batch classify failed (%s)", exc)
+    return [[] for _ in emails]
+
+
 def assign_labels_bulk(emails: list[dict], custom_rules: dict[str, list[str]] | None = None) -> None:
-    """Assign smart labels in-place for a list of emails (modifies each dict)."""
-    for email in emails:
-        email["smartLabels"] = assign_labels(email, custom_rules)
+    """Assign smart labels in-place. Rule-based first; one batched Gemini call for the rest."""
+    unmatched_indices = []
+    for i, email in enumerate(emails):
+        labels = _rule_match(email)
+        email["smartLabels"] = labels
+        if not labels and (email.get("body") or email.get("snippet")):
+            unmatched_indices.append(i)
+
+    if unmatched_indices:
+        batch = [emails[i] for i in unmatched_indices]
+        batch_labels = _gemini_classify_batch(batch)
+        for idx, labels in zip(unmatched_indices, batch_labels):
+            emails[idx]["smartLabels"] = labels

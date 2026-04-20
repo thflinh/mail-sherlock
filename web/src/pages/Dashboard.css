@@ -1317,22 +1317,13 @@
   min-width: 480px;
 }
 
-.db-reader-html {
-  font-size: 13px;
-  line-height: 1.68;
-  color: var(--text);
-  word-break: break-word;
-}
-.db-reader-html a { color: var(--primary); text-decoration: underline; }
-.db-reader-html table { border-collapse: collapse; width: 100%; font-size: 12px; }
-.db-reader-html td,
-.db-reader-html th { border: 0.5px solid var(--border); padding: 4px 8px; text-align: left; }
-.db-reader-html img { max-width: 100%; height: auto; }
-.db-reader-html blockquote {
-  border-left: 3px solid var(--accent);
-  margin: 8px 0;
-  padding: 4px 12px;
-  color: var(--muted);
+.db-reader-iframe {
+  width: 100%;
+  flex: 1;
+  border: none;
+  background: #fff;
+  border-radius: 6px;
+  min-height: 500px;
 }
 
 .db-reader-text {

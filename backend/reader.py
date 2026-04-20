@@ -141,6 +141,11 @@ async def get_email_for_reader(email_id: str, db) -> dict | None:
     raw_html = doc.get("bodyHtml") or ""
     body_text = doc.get("body") or ""
 
+    # If bodyHtml is absent but body contains HTML, promote it
+    if not raw_html and re.search(r"<(html|body|div|table|td|p|br)\b", body_text, re.IGNORECASE):
+        raw_html = body_text
+        body_text = ""
+
     safe_html = sanitize_html(raw_html) if raw_html else ""
     plain_text = body_text or (extract_plain_text(raw_html) if raw_html else "")
 

@@ -1600,13 +1600,13 @@ async def _sync_account_bulk(db, account_email: str, creds: Credentials, max_res
         return _raw_message_to_doc(raw, account_email)
 
     loop = asyncio.get_running_loop()
-    # 20 workers for email detail fetches + 1 spare for page listing.
+    # 10 workers balances speed against Gmail's per-user concurrent request limit.
     fetch_tasks: list[asyncio.Future] = []
     collected = 0
     page_token: str | None = None
 
     try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=21) as pool:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
             # Pipeline: as each page of IDs arrives, immediately fire off
             # email detail fetches for new IDs while the next page is listed.
             while collected < max_results:
@@ -1679,7 +1679,7 @@ async def sync_emails(request: Request, response: Response):
             last_error = f"Missing credentials for {email}"
             continue
         account_emails.append(email)
-        tasks.append(_sync_account_bulk(db, email, creds, max_results=1000, owner_session=session_id))
+        tasks.append(_sync_account_bulk(db, email, creds, max_results=200, owner_session=session_id))
 
     # Run all account syncs concurrently instead of sequentially.
     results = await asyncio.gather(*tasks, return_exceptions=True)

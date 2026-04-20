@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 _api_key = os.environ.get("GEMINI_API_KEY", "")
 _client = genai.Client(api_key=_api_key) if _api_key else None
 
-_MODEL = "gemini-2.5-flash"
+_MODEL = "gemini-2.5-flash-lite"
 
 
 @dataclass

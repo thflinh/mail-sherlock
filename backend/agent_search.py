@@ -20,8 +20,8 @@ if not _api_key:
 
 _client = genai.Client(api_key=_api_key) if _api_key else None
 
-# gemini-2.5-flash: best balance of speed and accuracy for structured extraction
-_MODEL = "gemini-2.5-flash"
+# gemini-2.5-flash-lite: best balance of speed and accuracy for structured extraction
+_MODEL = "gemini-2.5-flash-lite"
 
 # ── Query understanding ────────────────────────────────────────────────────────
 
@@ -128,7 +128,12 @@ def understand_query(user_query: str, history: list[dict] | None = None) -> dict
                 "system_instruction": _UNDERSTAND_SYSTEM,
             },
         )
-        parsed = json.loads(_strip_json(response.text))
+        raw = (response.text or "").strip()
+        logger.debug("Gemini understand_query raw response: %r", raw[:200])
+        if not raw:
+            logger.warning("Gemini understand_query returned empty response — fallback.")
+            return _fallback(user_query)
+        parsed = json.loads(_strip_json(raw))
         upc = parsed.get("uses_prior_context", False)
         if isinstance(upc, str):
             parsed["uses_prior_context"] = upc.strip().lower() in ("true", "1", "yes")
@@ -161,6 +166,13 @@ def rerank(user_query: str, candidates: list[dict], top_k: int = 5) -> list[dict
     """
     if not _client or len(candidates) <= 1:
         return candidates[:top_k]
+
+    # Skip rerank when top result is already clearly ahead (saves 1 Gemini call).
+    if len(candidates) >= 2:
+        top_score = float(candidates[0].get("score", 0))
+        second_score = float(candidates[1].get("score", 0))
+        if top_score > 0.6 and (top_score - second_score) > 0.15:
+            return candidates[:top_k]
 
     # Build summaries with more context so Gemini can distinguish similar emails
     summaries = []
