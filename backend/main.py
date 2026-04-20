@@ -41,11 +41,6 @@ from embeddings import (
 )
 from agent_search import understand_query, rerank
 from agent import (
-    find as agent_find,
-    answer as agent_answer,
-    summarize as agent_summarize,
-    extract as agent_extract,
-    chitchat as agent_chitchat,
     stream_call as agent_stream_call,
     find_prompt,
     answer_prompt,
