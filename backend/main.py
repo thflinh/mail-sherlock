@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from contextlib import asynccontextmanager
@@ -40,7 +40,19 @@ from embeddings import (
     warmup,
 )
 from agent_search import understand_query, rerank
-from agent import find as agent_find, answer as agent_answer, summarize as agent_summarize, extract as agent_extract, chitchat as agent_chitchat
+from agent import (
+    find as agent_find,
+    answer as agent_answer,
+    summarize as agent_summarize,
+    extract as agent_extract,
+    chitchat as agent_chitchat,
+    stream_call as agent_stream_call,
+    find_prompt,
+    answer_prompt,
+    summarize_prompt,
+    extract_prompt,
+    chitchat_prompt,
+)
 from reader import get_email_for_reader
 from labels import assign_labels_bulk
 from chunk_index import ensure_chunk_indexes, merged_chunk_body_for_query, rebuild_chunks_for_emails
@@ -1200,72 +1212,69 @@ async def ask(req: QueryRequest, request: Request, response: Response):
     return await _semantic_search(req.query, session_id, top_k=req.top_k)
 
 
-@app.post("/chat")
-async def chat(req: ChatRequest, request: Request, response: Response):
-    session_id = await _resolve_session(request, response)
+_STRIP_FIELDS = {"embedding", "emb_subject", "emb_body", "owner_session", "_id"}
+
+
+def _results_for_client(docs: list[dict]) -> list[dict]:
+    return [{k: v for k, v in d.items() if k not in _STRIP_FIELDS} for d in docs[:5]]
+
+
+async def _chat_stream(req: ChatRequest, session_id: str):
+    """SSE generator: meta event → token events → done event."""
+
+    def _sse(data: dict) -> str:
+        return f"data: {json.dumps(data)}\n\n"
+
     query_text = _latest_user_message(req.messages)
     if not query_text:
-        raise HTTPException(status_code=400, detail="Add at least one user message with text.")
+        yield _sse({"type": "error", "detail": "Add at least one user message with text."})
+        return
 
     history = [{"role": m.role, "content": m.content} for m in req.messages[:-1]]
     filters = req.filters.model_dump() if req.filters else None
-    prior_ok = req.context is not None and _context_matches_request(
-        req.context, req.top_k, filters
-    )
+    prior_ok = req.context is not None and _context_matches_request(req.context, req.top_k, filters)
 
     db = get_db()
     gmail_auth_email = await _get_stored_gmail_address(db)
     connected_accounts = await _list_connected_emails(db)
 
-    intent = understand_query(query_text, history=history)
+    loop = asyncio.get_running_loop()
+    intent = await loop.run_in_executor(None, understand_query, query_text, history)
 
     if intent.get("needs_clarification"):
         ctx_out = req.context.model_dump() if prior_ok else None
-        return {
-            "reply": intent.get("clarifying_question", "Could you give me more details?"),
-            "mode": "clarify",
-            "results": [],
-            "intent": intent,
-            "clarification": intent.get("clarifying_question"),
-            "gmailAuthEmail": gmail_auth_email,
-            "accounts": connected_accounts,
-            "context": ctx_out,
-        }
+        clarify_q = intent.get("clarifying_question", "Could you give me more details?")
+        yield _sse({"type": "meta", "mode": "clarify", "results": [], "intent": intent,
+                    "clarification": clarify_q, "gmailAuthEmail": gmail_auth_email,
+                    "accounts": connected_accounts, "context": ctx_out})
+        yield _sse({"type": "token", "text": clarify_q})
+        yield _sse({"type": "done"})
+        return
 
     mode = intent.get("mode") or "find"
     uses_prior = bool(intent.get("uses_prior_context"))
     context_ref = _normalize_context_ref(intent.get("context_ref"))
-
-    if mode == "chitchat":
-        resp = agent_chitchat(query_text, conversation=history)
-        ctx_out = req.context.model_dump() if prior_ok else None
-        return {
-            "reply": resp.reply,
-            "mode": resp.mode,
-            "results": [],
-            "intent": intent,
-            "gmailAuthEmail": gmail_auth_email,
-            "accounts": connected_accounts,
-            "clarification": None,
-            "context": ctx_out,
-        }
-
     candidates: list[dict] = []
     preloaded_email: Optional[dict] = None
 
-    if mode in ("find", "summarize"):
-        search_result = await _semantic_search(
-            query_text,
-            session_id,
-            req.top_k,
-            history=history,
-            filters=filters,
-            intent=intent,
-        )
-        candidates = list(search_result.get("results") or [])
-        gmail_auth_email = search_result.get("gmailAuthEmail", gmail_auth_email)
-        connected_accounts = list(search_result.get("accounts") or connected_accounts)
+    if mode == "chitchat":
+        ctx_out = req.context.model_dump() if prior_ok else None
+        yield _sse({"type": "meta", "mode": "chitchat", "results": [], "intent": intent,
+                    "clarification": None, "gmailAuthEmail": gmail_auth_email,
+                    "accounts": connected_accounts, "context": ctx_out})
+        system, user_p, max_tok = chitchat_prompt(query_text)
+        async for chunk in agent_stream_call(system, user_p, max_tok):
+            yield _sse({"type": "token", "text": chunk})
+        yield _sse({"type": "done"})
+        return
 
+    # Search phase
+    if mode in ("find", "summarize"):
+        sr = await _semantic_search(query_text, session_id, req.top_k,
+                                    history=history, filters=filters, intent=intent)
+        candidates = list(sr.get("results") or [])
+        gmail_auth_email = sr.get("gmailAuthEmail", gmail_auth_email)
+        connected_accounts = list(sr.get("accounts") or connected_accounts)
     elif mode in ("answer", "extract"):
         prior_path = bool(uses_prior and prior_ok and req.context is not None)
         if prior_path:
@@ -1279,33 +1288,28 @@ async def chat(req: ChatRequest, request: Request, response: Response):
             if not preloaded_email:
                 prior_path = False
         if not prior_path:
-            search_result = await _semantic_search(
-                query_text,
-                session_id,
-                req.top_k,
-                history=history,
-                filters=filters,
-                intent=intent,
-            )
-            candidates = list(search_result.get("results") or [])
-            gmail_auth_email = search_result.get("gmailAuthEmail", gmail_auth_email)
-            connected_accounts = list(search_result.get("accounts") or connected_accounts)
+            sr = await _semantic_search(query_text, session_id, req.top_k,
+                                        history=history, filters=filters, intent=intent)
+            candidates = list(sr.get("results") or [])
+            gmail_auth_email = sr.get("gmailAuthEmail", gmail_auth_email)
+            connected_accounts = list(sr.get("accounts") or connected_accounts)
             preloaded_email = None
     else:
-        search_result = await _semantic_search(
-            query_text,
-            session_id,
-            req.top_k,
-            history=history,
-            filters=filters,
-            intent=intent,
-        )
-        candidates = list(search_result.get("results") or [])
-        gmail_auth_email = search_result.get("gmailAuthEmail", gmail_auth_email)
-        connected_accounts = list(search_result.get("accounts") or connected_accounts)
+        sr = await _semantic_search(query_text, session_id, req.top_k,
+                                    history=history, filters=filters, intent=intent)
+        candidates = list(sr.get("results") or [])
+        gmail_auth_email = sr.get("gmailAuthEmail", gmail_auth_email)
+        connected_accounts = list(sr.get("accounts") or connected_accounts)
+
+    # Build prompt per mode
+    system: str = ""
+    user_p: str = ""
+    max_tok: int = 512
+    ctx_dict: dict = {}
+    results_for_meta: list[dict] = candidates
 
     if mode == "answer":
-        email_doc = None
+        email_doc: Optional[dict] = None
         if (req.active_email_id or "").strip():
             email_doc = await _fetch_email_doc(db, session_id, req.active_email_id.strip())
         if not email_doc and preloaded_email:
@@ -1317,34 +1321,22 @@ async def chat(req: ChatRequest, request: Request, response: Response):
             if not email_doc:
                 email_doc = candidates[0]
         if not email_doc:
-            return {
-                "reply": "I couldn't find a relevant email to answer that question from.",
-                "mode": mode,
-                "results": [],
-                "intent": intent,
-                "gmailAuthEmail": gmail_auth_email,
-                "accounts": connected_accounts,
-                "clarification": None,
-                "context": _build_chat_context_dict(mode, [], None, req.top_k, filters),
-            }
+            ctx_dict = _build_chat_context_dict(mode, [], None, req.top_k, filters)
+            yield _sse({"type": "meta", "mode": mode, "results": [], "intent": intent,
+                        "clarification": None, "gmailAuthEmail": gmail_auth_email,
+                        "accounts": connected_accounts, "context": ctx_dict})
+            yield _sse({"type": "token", "text": "I couldn't find a relevant email to answer that question from."})
+            yield _sse({"type": "done"})
+            return
         top_score = float(candidates[0].get("score", 0)) if candidates else None
         email_llm, pmeta, cmeta = await _augment_email_body_for_llm(db, email_doc, query_text)
-        log_rag_passage_context(
-            "answer",
-            str(email_doc.get("id")),
-            pmeta,
-            top_retrieval_score=top_score,
-            chunk_meta=cmeta,
-        )
-        resp = agent_answer(query_text, email_llm, conversation=history)
+        log_rag_passage_context("answer", str(email_doc.get("id")), pmeta,
+                                top_retrieval_score=top_score, chunk_meta=cmeta)
+        system, user_p, max_tok = answer_prompt(query_text, email_llm)
         active_id = email_doc.get("id")
         if uses_prior and prior_ok and req.context is not None:
-            ctx_dict = {
-                "result_ids": list(req.context.result_ids),
-                "active_email_id": active_id,
-                "mode": "answer",
-                "search_key": _conversation_search_key(req.top_k, filters),
-            }
+            ctx_dict = {"result_ids": list(req.context.result_ids), "active_email_id": active_id,
+                        "mode": "answer", "search_key": _conversation_search_key(req.top_k, filters)}
         else:
             ctx_dict = _build_chat_context_dict("answer", candidates, active_id, req.top_k, filters)
 
@@ -1354,18 +1346,12 @@ async def chat(req: ChatRequest, request: Request, response: Response):
             doc = await _fetch_email_doc(db, session_id, req.active_email_id.strip())
             if doc:
                 emails_to_summarize = [doc]
-        max_raw = (
-            max(len(e.get("body") or "") for e in emails_to_summarize)
-            if emails_to_summarize
-            else 0
-        )
-        logger.info(
-            "rag_context mode=summarize email_count=%s max_raw_body_len=%s",
-            len(emails_to_summarize),
-            max_raw,
-        )
-        resp = agent_summarize(emails_to_summarize, query_text)
-        active_id = resp.results[0].get("id") if resp.results else None
+        max_raw = max((len(e.get("body") or "") for e in emails_to_summarize), default=0)
+        logger.info("rag_context mode=summarize email_count=%s max_raw_body_len=%s",
+                    len(emails_to_summarize), max_raw)
+        system, user_p, max_tok = summarize_prompt(emails_to_summarize, query_text)
+        active_id = emails_to_summarize[0].get("id") if emails_to_summarize else None
+        results_for_meta = emails_to_summarize
         ctx_dict = _build_chat_context_dict("summarize", candidates, active_id, req.top_k, filters)
 
     elif mode == "extract":
@@ -1382,53 +1368,58 @@ async def chat(req: ChatRequest, request: Request, response: Response):
             if not email_doc:
                 email_doc = candidates[0]
         if not email_doc:
-            return {
-                "reply": "I couldn't find a relevant email to extract from.",
-                "mode": mode,
-                "results": [],
-                "intent": intent,
-                "gmailAuthEmail": gmail_auth_email,
-                "accounts": connected_accounts,
-                "clarification": None,
-                "context": _build_chat_context_dict(mode, [], None, req.top_k, filters),
-            }
+            ctx_dict = _build_chat_context_dict(mode, [], None, req.top_k, filters)
+            yield _sse({"type": "meta", "mode": mode, "results": [], "intent": intent,
+                        "clarification": None, "gmailAuthEmail": gmail_auth_email,
+                        "accounts": connected_accounts, "context": ctx_dict})
+            yield _sse({"type": "token", "text": "I couldn't find a relevant email to extract from."})
+            yield _sse({"type": "done"})
+            return
         passage_q = f"{extract_field} {query_text}"
         top_score = float(candidates[0].get("score", 0)) if candidates else None
         email_llm, pmeta, cmeta = await _augment_email_body_for_llm(db, email_doc, passage_q)
-        log_rag_passage_context(
-            "extract",
-            str(email_doc.get("id")),
-            pmeta,
-            top_retrieval_score=top_score,
-            chunk_meta=cmeta,
-        )
-        resp = agent_extract(extract_field, email_llm)
+        log_rag_passage_context("extract", str(email_doc.get("id")), pmeta,
+                                top_retrieval_score=top_score, chunk_meta=cmeta)
+        system, user_p, max_tok = extract_prompt(extract_field, email_llm)
         active_id = email_doc.get("id")
         if uses_prior and prior_ok and req.context is not None:
-            ctx_dict = {
-                "result_ids": list(req.context.result_ids),
-                "active_email_id": active_id,
-                "mode": "extract",
-                "search_key": _conversation_search_key(req.top_k, filters),
-            }
+            ctx_dict = {"result_ids": list(req.context.result_ids), "active_email_id": active_id,
+                        "mode": "extract", "search_key": _conversation_search_key(req.top_k, filters)}
         else:
             ctx_dict = _build_chat_context_dict("extract", candidates, active_id, req.top_k, filters)
 
-    else:
-        resp = agent_find(query_text, candidates, conversation=history)
-        first_id = resp.results[0].get("id") if resp.results else None
-        ctx_dict = _build_chat_context_dict("find", resp.results, first_id, req.top_k, filters)
+    else:  # find (default)
+        if not candidates:
+            ctx_dict = _build_chat_context_dict("find", [], None, req.top_k, filters)
+            yield _sse({"type": "meta", "mode": "find", "results": [], "intent": intent,
+                        "clarification": None, "gmailAuthEmail": gmail_auth_email,
+                        "accounts": connected_accounts, "context": ctx_dict})
+            yield _sse({"type": "token", "text": "I couldn't find any emails matching that description. Try rephrasing or adding more details."})
+            yield _sse({"type": "done"})
+            return
+        first_id = candidates[0].get("id") if candidates else None
+        ctx_dict = _build_chat_context_dict("find", candidates, first_id, req.top_k, filters)
+        system, user_p, max_tok = find_prompt(query_text, candidates)
 
-    return {
-        "reply": resp.reply,
-        "mode": resp.mode,
-        "results": resp.results,
-        "intent": intent,
-        "gmailAuthEmail": gmail_auth_email,
-        "accounts": connected_accounts,
-        "clarification": None,
-        "context": ctx_dict,
-    }
+    # Send meta (results + context) before text starts streaming
+    yield _sse({"type": "meta", "mode": mode, "results": _results_for_client(results_for_meta),
+                "intent": intent, "clarification": None, "gmailAuthEmail": gmail_auth_email,
+                "accounts": connected_accounts, "context": ctx_dict})
+
+    async for chunk in agent_stream_call(system, user_p, max_tok):
+        yield _sse({"type": "token", "text": chunk})
+
+    yield _sse({"type": "done"})
+
+
+@app.post("/chat")
+async def chat(req: ChatRequest, request: Request, response: Response):
+    session_id = await _resolve_session(request, response)
+    return StreamingResponse(
+        _chat_stream(req, session_id),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/email/{email_id}")

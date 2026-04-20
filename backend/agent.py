@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass, field
+from typing import AsyncGenerator
 
 import google.genai as genai
 
@@ -238,3 +239,84 @@ def chitchat(
         reply_text = "I'm here to help you find and understand your emails. What are you looking for?"
 
     return AgentResponse(reply=reply_text, results=[], mode="chitchat")
+
+
+# ── Streaming support ─────────────────────────────────────────────────────────
+
+async def stream_call(system: str, user: str, max_tokens: int = 1024) -> AsyncGenerator[str, None]:
+    """Async generator: stream Gemini response chunks. Falls back to one-shot on error."""
+    if not _client:
+        return
+    try:
+        stream = await _client.aio.models.generate_content_stream(
+            model=_MODEL,
+            contents=user,
+            config={
+                "temperature": 0.3,
+                "max_output_tokens": max_tokens,
+                "system_instruction": system,
+            },
+        )
+        async for chunk in stream:
+            if chunk.text:
+                yield chunk.text
+    except Exception as exc:
+        logger.warning("Gemini stream failed (%s) — falling back to sync.", exc)
+        text = _call(system, user, max_tokens)
+        if text:
+            yield text
+
+
+def find_prompt(query: str, candidates: list[dict]) -> tuple[str, str, int]:
+    candidate_text = _format_candidates(candidates)
+    user = (
+        f'User query: "{query}"\n\n'
+        f"Candidate emails:\n{candidate_text}\n\n"
+        f"Write 1-2 sentences summarizing what you found. Be specific and conversational."
+    )
+    return _FIND_SYSTEM, user, 256
+
+
+def answer_prompt(question: str, email: dict) -> tuple[str, str, int]:
+    body = (email.get("body") or email.get("snippet") or "")[:8000]
+    user = (
+        f"Email from: {email.get('sender','')}\n"
+        f"Subject: {email.get('subject','')}\n"
+        f"Date: {email.get('date','')}\n"
+        f"Body:\n{body}\n\n"
+        f"Question: {question}"
+    )
+    return _ANSWER_SYSTEM, user, 512
+
+
+def summarize_prompt(emails: list[dict], user_request: str) -> tuple[str, str, int]:
+    blocks = []
+    for i, e in enumerate(sorted(emails, key=lambda x: x.get("date", ""))):
+        raw = e.get("body") or e.get("snippet") or ""
+        body, _ = body_for_llm(raw, user_request, max_chars=2400)
+        blocks.append(
+            f"--- Email {i+1} ---\n"
+            f"From: {e.get('sender','')}\n"
+            f"Subject: {e.get('subject','')}\n"
+            f"Date: {e.get('date','')}\n"
+            f"Body: {body}"
+        )
+    user = "\n\n".join(blocks) + f"\n\nUser's request: {user_request}"
+    return _SUMMARIZE_SYSTEM, user, 768
+
+
+def extract_prompt(field_name: str, email: dict) -> tuple[str, str, int]:
+    body = (email.get("body") or email.get("snippet") or "")[:8000]
+    user = (
+        f"Extract: {field_name}\n\n"
+        f"Email:\n"
+        f"Subject: {email.get('subject','')}\n"
+        f"From: {email.get('sender','')}\n"
+        f"Date: {email.get('date','')}\n"
+        f"Body:\n{body}"
+    )
+    return _EXTRACT_SYSTEM, user, 256
+
+
+def chitchat_prompt(message: str) -> tuple[str, str, int]:
+    return _CHITCHAT_SYSTEM, message, 256

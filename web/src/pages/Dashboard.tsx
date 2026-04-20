@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import "./Dashboard.css";
 import type { Page } from "../App";
 import iconUrl from "../assets/icon.png";
-import type { AgentMode, EmailDetail, EmailResult, SearchResponse } from "../types";
+import type { AgentMode, EmailDetail, EmailResult } from "../types";
 import { createEvent, deleteEvent, getEvents, type CalendarEvent } from "../api/events";
 import { getAccounts, switchAccount } from "../api/accounts";
 import { logoutSession } from "../api/auth";
@@ -323,6 +323,12 @@ export default function Dashboard({ navigate }: Props) {
       { role: "user" as const, content: msg },
     ];
 
+    const aiMsgId = ++msgIdRef.current;
+    setMessages((prev) => [
+      ...prev,
+      { id: aiMsgId, role: "ai", content: "", time: nowTime() },
+    ]);
+
     try {
       const res = await fetch("/chat", {
         method: "POST",
@@ -339,76 +345,101 @@ export default function Dashboard({ navigate }: Props) {
         }),
       });
       if (!res.ok) throw new Error(`Server error ${res.status}`);
-      const data: SearchResponse = await res.json();
-      if (Array.isArray(data.accounts) && data.accounts.length > 0) {
-        setAccounts(data.accounts);
-        setGmailEmail(data.gmailAuthEmail ?? data.accounts[0] ?? null);
-      } else if (data.gmailAuthEmail) {
-        setGmailEmail(data.gmailAuthEmail);
+      if (!res.body) throw new Error("No response body");
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let metaMode: AgentMode | undefined;
+      let metaResults: EmailResult[] = [];
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          let payload: Record<string, unknown>;
+          try { payload = JSON.parse(line.slice(6)); } catch { continue; }
+
+          if (payload.type === "meta") {
+            const rawResults = (payload.results as unknown[]) ?? [];
+            metaResults = rawResults.map((r) => {
+              const row = r as EmailResult & { sender?: string; accountEmail?: string };
+              const sender = String(row.sender ?? row.from ?? "");
+              const acct = String(row.accountEmail ?? row.account ?? "").trim();
+              return {
+                id: String(row.id ?? ""),
+                from: sender,
+                subject: String(row.subject ?? ""),
+                snippet: String(row.snippet ?? ""),
+                date: row.date != null ? String(row.date) : undefined,
+                score: row.score != null ? Math.round(Number(row.score) * 100) : undefined,
+                account: acct || undefined,
+                tags: row.tags,
+                initials: initials(sender),
+                avatarBg: "#F0C4DC",
+                avatarColor: "#72243E",
+              };
+            });
+            metaMode = payload.mode as AgentMode;
+            if (Array.isArray(payload.accounts) && (payload.accounts as string[]).length > 0) {
+              setAccounts(payload.accounts as string[]);
+              setGmailEmail((payload.gmailAuthEmail as string) ?? (payload.accounts as string[])[0] ?? null);
+            } else if (payload.gmailAuthEmail) {
+              setGmailEmail(payload.gmailAuthEmail as string);
+            }
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === aiMsgId
+                  ? { ...m, mode: metaMode, results: metaResults.length > 0 && metaMode !== "chitchat" ? metaResults : undefined }
+                  : m,
+              ),
+            );
+          } else if (payload.type === "token") {
+            const chunk = payload.text as string;
+            setMessages((prev) =>
+              prev.map((m) => (m.id === aiMsgId ? { ...m, content: m.content + chunk } : m)),
+            );
+            scrollToBottom();
+          } else if (payload.type === "done") {
+            const count = metaResults.length;
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === aiMsgId
+                  ? {
+                      ...m,
+                      suggestions:
+                        count > 0
+                          ? [
+                              { label: "Filter attachments", query: "Show only emails with attachments" },
+                              { label: "Narrow by date", query: "Emails from the last month" },
+                              { label: "New search", query: "Search for a different email" },
+                            ]
+                          : [
+                              { label: "Try different wording", query: "invoice or receipt from last month" },
+                              { label: "Search by sender", query: "emails from my bank" },
+                              { label: "New search", query: "Search for a different email" },
+                            ],
+                    }
+                  : m,
+              ),
+            );
+          }
+        }
       }
-
-      const rawResults = data.results ?? [];
-      const results: EmailResult[] = rawResults.map((r) => {
-        const row = r as EmailResult & { sender?: string; accountEmail?: string };
-        const sender = String(row.sender ?? row.from ?? "");
-        const acct = String(row.accountEmail ?? row.account ?? "").trim();
-        return {
-          id: String(row.id ?? ""),
-          from: sender,
-          subject: String(row.subject ?? ""),
-          snippet: String(row.snippet ?? ""),
-          date: row.date != null ? String(row.date) : undefined,
-          score: row.score != null ? Math.round(Number(row.score) * 100) : undefined,
-          account: acct || undefined,
-          tags: row.tags,
-          initials: initials(sender),
-          avatarBg: "#F0C4DC",
-          avatarColor: "#72243E",
-        };
-      });
-
-      const count = results.length;
-      const agentMode = data.mode;
-      const replyLine =
-        typeof data.reply === "string" && data.reply.trim()
-          ? data.reply.trim()
-          : count > 0
-            ? `I found **${count}** email${count === 1 ? "" : "s"} that match. Here are the top results:`
-            : "I couldn't find any emails matching that description. Try rephrasing or adding more details.";
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: ++msgIdRef.current,
-          role: "ai",
-          content: replyLine,
-          mode: agentMode,
-          results: count > 0 && agentMode !== "chitchat" ? results : undefined,
-          suggestions:
-            count > 0
-              ? [
-                  { label: "Filter attachments", query: "Show only emails with attachments" },
-                  { label: "Narrow by date", query: "Emails from the last month" },
-                  { label: "New search", query: "Search for a different email" },
-                ]
-              : [
-                  { label: "Try different wording", query: "invoice or receipt from last month" },
-                  { label: "Search by sender", query: "emails from my bank" },
-                  { label: "New search", query: "Search for a different email" },
-                ],
-          time: nowTime(),
-        },
-      ]);
     } catch (err) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: ++msgIdRef.current,
-          role: "ai",
-          content: err instanceof Error ? err.message : "Something went wrong. Please try again.",
-          time: nowTime(),
-        },
-      ]);
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === aiMsgId
+            ? { ...m, content: err instanceof Error ? err.message : "Something went wrong. Please try again." }
+            : m,
+        ),
+      );
     } finally {
       setTyping(false);
       scrollToBottom();
