@@ -431,8 +431,9 @@ async def _incremental_sync_account(db, account_email: str, creds: Credentials) 
             ]
             emails: list[dict] = list(await asyncio.gather(*futures))
 
-        add_embeddings_inplace(emails)
-        assign_labels_bulk(emails)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, add_embeddings_inplace, emails)
+        await loop.run_in_executor(None, assign_labels_bulk, emails)
 
         if emails:
             ops = [UpdateOne({"id": e["id"]}, {"$set": e}, upsert=True) for e in emails]
@@ -1637,8 +1638,9 @@ async def _sync_account_bulk(db, account_email: str, creds: Credentials, max_res
     if owner_session:
         for e in emails:
             e["owner_session"] = owner_session
-    add_embeddings_inplace(emails)
-    assign_labels_bulk(emails)
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, add_embeddings_inplace, emails)
+    await loop.run_in_executor(None, assign_labels_bulk, emails)
     try:
         if emails:
             ops = [UpdateOne({"id": e["id"], "owner_session": owner_session}, {"$set": e}, upsert=True) for e in emails]
@@ -1718,8 +1720,9 @@ async def seed_emails(request: Request, response: Response):
     emails = json.loads(path.read_text())
     for e in emails:
         e["owner_session"] = session_id
-    add_embeddings_inplace(emails)
-    assign_labels_bulk(emails)
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, add_embeddings_inplace, emails)
+    await loop.run_in_executor(None, assign_labels_bulk, emails)
     try:
         await db["email_chunks"].delete_many({"ingest_key": session_id})
         await db["emails"].delete_many({"owner_session": session_id})
