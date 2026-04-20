@@ -39,7 +39,7 @@ from embeddings import (
     encode,
     warmup,
 )
-from agent_search import understand_query, rerank
+from agent_search import understand_query, understand_query_async, rerank
 from agent import (
     stream_call as agent_stream_call,
     find_prompt,
@@ -1225,16 +1225,20 @@ async def _chat_stream(req: ChatRequest, session_id: str):
         yield _sse({"type": "error", "detail": "Add at least one user message with text."})
         return
 
+    # Acknowledge immediately — keeps nginx alive and gives the browser instant feedback
+    # while understand_query + semantic_search run (can take 3-5s on Gemini free tier).
+    yield _sse({"type": "thinking"})
+
     history = [{"role": m.role, "content": m.content} for m in req.messages[:-1]]
     filters = req.filters.model_dump() if req.filters else None
     prior_ok = req.context is not None and _context_matches_request(req.context, req.top_k, filters)
 
     db = get_db()
-    gmail_auth_email = await _get_stored_gmail_address(db)
-    connected_accounts = await _list_connected_emails(db)
-
-    loop = asyncio.get_running_loop()
-    intent = await loop.run_in_executor(None, understand_query, query_text, history)
+    gmail_auth_email, connected_accounts, intent = await asyncio.gather(
+        _get_stored_gmail_address(db),
+        _list_connected_emails(db),
+        understand_query_async(query_text, history=history),
+    )
 
     if intent.get("needs_clarification"):
         ctx_out = req.context.model_dump() if prior_ok else None

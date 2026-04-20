@@ -150,6 +150,50 @@ def understand_query(user_query: str, history: list[dict] | None = None) -> dict
         return _fallback(user_query)
 
 
+async def understand_query_async(user_query: str, history: list[dict] | None = None) -> dict:
+    """Async version of understand_query — uses aio client to avoid blocking the event loop."""
+    if not _client:
+        return _fallback(user_query)
+
+    contents = []
+    if history:
+        for turn in history:
+            role = "user" if turn.get("role") == "user" else "model"
+            contents.append({"role": role, "parts": [{"text": turn["content"]}]})
+    contents.append({"role": "user", "parts": [{"text": user_query}]})
+
+    try:
+        response = await _client.aio.models.generate_content(
+            model=_MODEL,
+            contents=contents,
+            config={
+                "temperature": 0,
+                "max_output_tokens": 512,
+                "system_instruction": _UNDERSTAND_SYSTEM,
+            },
+        )
+        raw = (response.text or "").strip()
+        logger.debug("Gemini understand_query raw response: %r", raw[:200])
+        if not raw:
+            logger.warning("Gemini understand_query returned empty response — fallback.")
+            return _fallback(user_query)
+        parsed = json.loads(_strip_json(raw))
+        upc = parsed.get("uses_prior_context", False)
+        if isinstance(upc, str):
+            parsed["uses_prior_context"] = upc.strip().lower() in ("true", "1", "yes")
+        elif isinstance(upc, bool):
+            pass
+        elif upc in (1, 1.0):
+            parsed["uses_prior_context"] = True
+        else:
+            parsed["uses_prior_context"] = False
+        logger.debug("Gemini intent: %s", parsed)
+        return parsed
+    except Exception as exc:
+        logger.warning("Gemini understand_query_async failed (%s) — raw query fallback.", exc)
+        return _fallback(user_query)
+
+
 def rerank(user_query: str, candidates: list[dict], top_k: int = 5) -> list[dict]:
     """Re-rank semantic search candidates by true relevance using Gemini.
 

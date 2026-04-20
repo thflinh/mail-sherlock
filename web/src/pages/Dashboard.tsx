@@ -366,7 +366,11 @@ export default function Dashboard({ navigate }: Props) {
           let payload: Record<string, unknown>;
           try { payload = JSON.parse(line.slice(6)); } catch { continue; }
 
-          if (payload.type === "meta") {
+          if (payload.type === "thinking") {
+            setMessages((prev) =>
+              prev.map((m) => (m.id === aiMsgId ? { ...m, content: "..." } : m)),
+            );
+          } else if (payload.type === "meta") {
             const rawResults = (payload.results as unknown[]) ?? [];
             metaResults = rawResults.map((r) => {
               const row = r as EmailResult & { sender?: string; accountEmail?: string };
@@ -403,7 +407,11 @@ export default function Dashboard({ navigate }: Props) {
           } else if (payload.type === "token") {
             const chunk = payload.text as string;
             setMessages((prev) =>
-              prev.map((m) => (m.id === aiMsgId ? { ...m, content: m.content + chunk } : m)),
+              prev.map((m) =>
+                m.id === aiMsgId
+                  ? { ...m, content: (m.content === "..." ? "" : m.content) + chunk }
+                  : m,
+              ),
             );
             scrollToBottom();
           } else if (payload.type === "done") {
