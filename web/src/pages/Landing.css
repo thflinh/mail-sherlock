@@ -6,6 +6,7 @@
   overflow: hidden;
 }
 
+/* ── Background orbs ── */
 .ls-orb {
   position: absolute;
   border-radius: 50%;
@@ -36,6 +37,7 @@
   left: 60px;
 }
 
+/* ── Left panel ── */
 .ls-left {
   flex: 1;
   display: flex;
@@ -110,9 +112,11 @@
   flex-shrink: 0;
 }
 
+/* ── Right panel ── */
 .ls-right {
-  width: 430px;
+  width: 460px;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   padding: 40px;
@@ -120,127 +124,114 @@
   z-index: 1;
 }
 
+/* ── Sign-in card ── */
 .ls-card {
   width: 100%;
-  background: rgba(255, 255, 255, 0.72);
-  backdrop-filter: blur(24px);
-  border: 1px solid rgba(220, 168, 204, 0.35);
-  border-radius: 24px;
-  padding: 28px;
-  box-shadow: 0 8px 48px rgba(155, 114, 207, 0.1);
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(28px);
+  border: 1px solid rgba(220, 168, 204, 0.3);
+  border-radius: 28px;
+  padding: 40px 36px 36px;
+  box-shadow:
+    0 2px 0 rgba(155, 114, 207, 0.06),
+    0 12px 48px rgba(155, 114, 207, 0.1);
 }
 
-.ls-tabs {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  background: rgba(155, 114, 207, 0.08);
-  padding: 4px;
-  border-radius: 12px;
-  gap: 4px;
-  margin-bottom: 22px;
-}
-
-.ls-tab {
-  border: none;
-  background: transparent;
-  border-radius: 9px;
-  padding: 9px 0;
-  font-size: 13px;
-  color: #6f6875;
-}
-
-.ls-tab.active {
-  background: #9b72cf;
-  color: #fff;
+.ls-card-eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: #9b72cf;
+  margin: 0 0 10px;
 }
 
 .ls-card-title {
   font-family: "Instrument Serif", Georgia, serif;
-  font-size: 28px;
+  font-size: 30px;
   color: #1a1a1a;
-  margin: 0 0 6px;
+  margin: 0 0 8px;
+  letter-spacing: -0.5px;
 }
 
 .ls-card-sub {
-  font-size: 13px;
+  font-size: 14px;
   color: #8e8495;
-  margin: 0 0 22px;
+  margin: 0 0 32px;
+  line-height: 1.5;
 }
 
+/* ── Google button ── */
 .ls-google-btn {
   width: 100%;
-  padding: 12px 16px;
-  background: #9b72cf;
-  color: #fff;
-  border: none;
+  padding: 14px 20px;
+  background: #fff;
+  color: #3c4043;
+  border: 1.5px solid #dadce0;
   border-radius: 12px;
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.ls-divider {
+  font-size: 15px;
+  font-weight: 500;
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 12px;
-  margin: 18px 0;
-  color: #b9a9bb;
-  font-size: 11px;
-  letter-spacing: 0.5px;
+  cursor: pointer;
+  transition: box-shadow 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+  font-family: inherit;
 }
 
-.ls-divider::before,
-.ls-divider::after {
-  content: "";
-  flex: 1;
-  height: 1px;
-  background: rgba(220, 168, 204, 0.3);
+.ls-google-btn:hover {
+  background: #f8f9fa;
+  border-color: #c6c9cc;
+  box-shadow: 0 2px 8px rgba(60, 64, 67, 0.1);
 }
 
-.ls-form {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+.ls-google-btn:active {
+  background: #f1f3f4;
+  box-shadow: none;
 }
 
-.ls-input-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
+.ls-google-btn:focus-visible {
+  outline: 3px solid rgba(155, 114, 207, 0.4);
+  outline-offset: 2px;
 }
 
-.ls-input-wrap span {
+.ls-google-icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+/* ── Gmail-only note ── */
+.ls-gmail-note {
+  margin: 16px 0 0;
   font-size: 12px;
-  color: #6f6875;
+  color: #a09aa6;
+  text-align: center;
+  line-height: 1.5;
 }
 
-.ls-input-wrap input {
-  border: 1px solid rgba(155, 114, 207, 0.24);
-  border-radius: 11px;
-  padding: 10px 12px;
-  background: rgba(255, 255, 255, 0.72);
+/* ── Privacy row ── */
+.ls-privacy-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 28px;
+  padding-top: 24px;
+  border-top: 1px solid rgba(220, 168, 204, 0.2);
+  color: #b0a8b5;
 }
 
-.ls-submit-btn {
-  margin-top: 6px;
-  border: none;
-  border-radius: 12px;
-  padding: 12px;
-  background: #1e1a24;
-  color: #fff;
-  font-weight: 600;
-}
-
-.ls-form-error {
-  margin: 2px 0 0;
-  font-size: 12px;
-  color: #a32d2d;
+.ls-privacy-row svg {
+  flex-shrink: 0;
+  margin-top: 1px;
 }
 
 .ls-privacy {
-  margin: 16px 0 0;
+  margin: 0;
   font-size: 12px;
   color: #7d7385;
-  line-height: 1.45;
+  line-height: 1.5;
 }
 
 .ls-privacy strong {
@@ -248,6 +239,7 @@
   font-weight: 600;
 }
 
+/* ── Footer ── */
 .ls-footer {
   margin-top: 18px;
   text-align: center;
@@ -255,6 +247,7 @@
   color: #c7bdce;
 }
 
+/* ── Responsive ── */
 @media (max-width: 960px) {
   .ls-login-root {
     flex-direction: column;
@@ -274,6 +267,6 @@
 
   .ls-right {
     width: 100%;
-    padding: 20px;
+    padding: 20px 20px 36px;
   }
 }

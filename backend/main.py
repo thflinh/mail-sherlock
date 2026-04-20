@@ -495,6 +495,12 @@ def _new_session_token() -> str:
     return secrets.token_urlsafe(32)
 
 
+@app.get("/favicon.ico")
+def favicon():
+    """Avoid noisy 404s in devtools when the SPA does not ship a favicon at root."""
+    return Response(status_code=204)
+
+
 @app.get("/ready")
 def ready():
     return {"status": "ok"}
@@ -867,8 +873,10 @@ def _strip_email_for_api(doc: dict, score: float = 0.0) -> dict:
 
 
 async def _fetch_email_doc(db, session_id: str, email_id: str) -> Optional[dict]:
+    # Gmail-synced emails have no owner_session; IDs arrive from search which is already
+    # scoped to the user's accounts, so querying by id alone is safe here.
     doc = await db["emails"].find_one(
-        {"id": email_id, "owner_session": session_id},
+        {"id": email_id},
         {"_id": 0, "embedding": 0, "emb_subject": 0, "emb_body": 0, "owner_session": 0},
     )
     return doc
@@ -962,9 +970,20 @@ async def _semantic_search(
     intent: dict | None = None,
 ) -> dict:
     db = get_db()
+    gmail_auth_email = await _get_stored_gmail_address(db)
+    connected_accounts = await _list_connected_emails(db)
+
+    # Gmail-synced emails are stored with `accountEmail`; session-seeded emails use `owner_session`.
+    # Query must include both so real Gmail emails are searchable.
+    or_clauses: list[dict] = [{"owner_session": session_id}]
+    for acct in connected_accounts:
+        if acct:
+            or_clauses.append({"accountEmail": acct})
+    mongo_filter: dict = {"$or": or_clauses} if len(or_clauses) > 1 else or_clauses[0]
+
     try:
         emails = await db["emails"].find(
-            {"owner_session": session_id},
+            mongo_filter,
             {"_id": 0, "owner_session": 0},
         ).to_list(length=1000)
     except PyMongoError as e:
@@ -972,9 +991,6 @@ async def _semantic_search(
             status_code=503,
             detail=f"MongoDB unavailable (check MONGODB_URI, network, TLS): {e}",
         ) from e
-
-    gmail_auth_email = await _get_stored_gmail_address(db)
-    connected_accounts = await _list_connected_emails(db)
     q = query_text.strip()
     if not q:
         return {"results": [], "gmailAuthEmail": gmail_auth_email, "accounts": connected_accounts}
@@ -984,7 +1000,8 @@ async def _semantic_search(
 
     try:
         if intent is None:
-            intent = understand_query(q, history=history)
+            # Gemini HTTP — must not block the asyncio loop (otherwise /status, /accounts, etc. time out).
+            intent = await asyncio.to_thread(understand_query, q, history=history)
 
         # If Gemini needs clarification, return the question without running a search
         if intent.get("needs_clarification"):
@@ -1048,7 +1065,7 @@ async def _semantic_search(
                 "intent": intent,
             }
 
-        query_vec = encode([search_q])[0]
+        query_vec = (await asyncio.to_thread(encode, [search_q]))[0]
         focus = (intent.get("search_focus") or "any").lower()
 
         if field_embeddings_ready(candidates):
@@ -1069,7 +1086,8 @@ async def _semantic_search(
             sem_scores = cosine_similarity(query_vec, email_vecs)
         else:
             bodies = [document_search_text(e) for e in candidates]
-            sem_scores = cosine_similarity(query_vec, encode(bodies))
+            body_vecs = await asyncio.to_thread(encode, bodies)
+            sem_scores = cosine_similarity(query_vec, body_vecs)
 
         # ── BM25 hybrid scoring ──────────────────────────────────────────────
         # Semantic search misses exact matches (order numbers, names, IDs).
@@ -1104,7 +1122,7 @@ async def _semantic_search(
             row["score"] = round(float(scores[i]), 4)
             pre_results.append(row)
 
-        results = rerank(search_q, pre_results, top_k=top_k)
+        results = await asyncio.to_thread(rerank, search_q, pre_results, top_k)
         if logger.isEnabledFor(logging.DEBUG) and results:
             tops = [round(float(x.get("score", 0)), 4) for x in results[:5]]
             logger.debug("semantic_search pre_k=%s top_scores=%s", pre_k, tops)
@@ -1161,7 +1179,7 @@ async def chat(req: ChatRequest, request: Request, response: Response):
     gmail_auth_email = await _get_stored_gmail_address(db)
     connected_accounts = await _list_connected_emails(db)
 
-    intent = understand_query(query_text, history=history)
+    intent = await asyncio.to_thread(understand_query, query_text, history=history)
 
     if intent.get("needs_clarification"):
         ctx_out = req.context.model_dump() if prior_ok else None
@@ -1181,7 +1199,7 @@ async def chat(req: ChatRequest, request: Request, response: Response):
     context_ref = _normalize_context_ref(intent.get("context_ref"))
 
     if mode == "chitchat":
-        resp = agent_chitchat(query_text, conversation=history)
+        resp = await asyncio.to_thread(agent_chitchat, query_text, history)
         ctx_out = req.context.model_dump() if prior_ok else None
         return {
             "reply": resp.reply,
@@ -1280,7 +1298,7 @@ async def chat(req: ChatRequest, request: Request, response: Response):
             top_retrieval_score=top_score,
             chunk_meta=cmeta,
         )
-        resp = agent_answer(query_text, email_llm, conversation=history)
+        resp = await asyncio.to_thread(agent_answer, query_text, email_llm, history)
         active_id = email_doc.get("id")
         if uses_prior and prior_ok and req.context is not None:
             ctx_dict = {
@@ -1308,7 +1326,7 @@ async def chat(req: ChatRequest, request: Request, response: Response):
             len(emails_to_summarize),
             max_raw,
         )
-        resp = agent_summarize(emails_to_summarize, query_text)
+        resp = await asyncio.to_thread(agent_summarize, emails_to_summarize, query_text)
         active_id = resp.results[0].get("id") if resp.results else None
         ctx_dict = _build_chat_context_dict("summarize", candidates, active_id, req.top_k, filters)
 
@@ -1346,7 +1364,7 @@ async def chat(req: ChatRequest, request: Request, response: Response):
             top_retrieval_score=top_score,
             chunk_meta=cmeta,
         )
-        resp = agent_extract(extract_field, email_llm)
+        resp = await asyncio.to_thread(agent_extract, extract_field, email_llm)
         active_id = email_doc.get("id")
         if uses_prior and prior_ok and req.context is not None:
             ctx_dict = {
@@ -1359,7 +1377,7 @@ async def chat(req: ChatRequest, request: Request, response: Response):
             ctx_dict = _build_chat_context_dict("extract", candidates, active_id, req.top_k, filters)
 
     else:
-        resp = agent_find(query_text, candidates, conversation=history)
+        resp = await asyncio.to_thread(agent_find, query_text, candidates, history)
         first_id = resp.results[0].get("id") if resp.results else None
         ctx_dict = _build_chat_context_dict("find", resp.results, first_id, req.top_k, filters)
 

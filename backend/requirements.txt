@@ -12,4 +12,5 @@ google-auth-oauthlib
 google-api-python-client
 google-genai
 rank-bm25
+bleach
 html2text

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -167,7 +168,8 @@ async def merged_chunk_body_for_query(
 
     qtext = (query or "").strip() or (clean[0].get("text") or "")[:200]
     try:
-        qvec = encode([qtext])[0].astype(np.float32)
+        enc = await asyncio.to_thread(encode, [qtext])
+        qvec = enc[0].astype(np.float32)
     except Exception as exc:
         logger.warning("chunk query encode failed: %s", exc)
         return None, meta

@@ -12,7 +12,14 @@ def _get_model():
     global _model
     if _model is None:
         from sentence_transformers import SentenceTransformer
+        import transformers.utils.logging as hf_logging
+        # BAAI/bge-base-en-v1.5 saves position_ids in its checkpoint (old transformers behaviour).
+        # Newer transformers registers it as a runtime buffer and flags the saved key as UNEXPECTED.
+        # This is harmless — suppress during load then restore original verbosity.
+        _prev = hf_logging.get_verbosity()
+        hf_logging.set_verbosity_error()
         _model = SentenceTransformer("BAAI/bge-base-en-v1.5")
+        hf_logging.set_verbosity(_prev)
     return _model
 
 
