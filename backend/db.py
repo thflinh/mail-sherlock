@@ -7,7 +7,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 load_dotenv()
 
 MONGODB_URI = os.getenv("MONGODB_URI", "")
-DB_MAIL = os.getenv("DB_MAIL", "mail_sherlock")
+DB_MAIL = (os.getenv("DB_MAIL", "mail_sherlock") or "mail_sherlock").strip()
 
 client: AsyncIOMotorClient = None
 

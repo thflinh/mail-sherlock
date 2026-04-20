@@ -509,6 +509,9 @@ if (_STATIC_DIR / "assets").exists():
 
 _flows = {}
 
+# BM25 cache: session_id → (BM25Okapi, email_count) — invalidated when email count changes
+_bm25_cache: dict = {}
+
 
 class EmailSignupRequest(BaseModel):
     name: str
@@ -1121,11 +1124,16 @@ async def _semantic_search(
         # ── BM25 hybrid scoring ──────────────────────────────────────────────
         # Semantic search misses exact matches (order numbers, names, IDs).
         # BM25 covers those gaps; blend 70% semantic + 30% keyword.
-        tokenized_corpus = [
-            (e.get("subject", "") + " " + e.get("body", "")).lower().split()
-            for e in candidates
-        ]
-        bm25 = BM25Okapi(tokenized_corpus)
+        cached = _bm25_cache.get(session_id)
+        if cached and cached[1] == len(candidates):
+            bm25 = cached[0]
+        else:
+            tokenized_corpus = [
+                (e.get("subject", "") + " " + e.get("body", "")).lower().split()
+                for e in candidates
+            ]
+            bm25 = BM25Okapi(tokenized_corpus)
+            _bm25_cache[session_id] = (bm25, len(candidates))
         bm25_scores = np.array(bm25.get_scores(search_q.lower().split()), dtype=np.float32)
 
         sem_max  = float(sem_scores.max())  or 1.0

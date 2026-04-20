@@ -2,7 +2,7 @@ import numpy as np
 
 # BAAI/bge-base-en-v1.5 — retrieval-optimised, outperforms MiniLM on search benchmarks.
 # Drop-in replacement; produces 768-dim normalised vectors.
-EMBEDDING_DIM: int = 768
+EMBEDDING_DIM: int = 384
 
 _model = None
 
@@ -12,7 +12,7 @@ def _get_model():
     global _model
     if _model is None:
         from sentence_transformers import SentenceTransformer
-        _model = SentenceTransformer("BAAI/bge-base-en-v1.5")
+        _model = SentenceTransformer("all-MiniLM-L6-v2")
     return _model
 
 
