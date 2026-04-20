@@ -160,7 +160,8 @@ def _gemini_classify_batch(emails: list[dict]) -> list[list[str]]:
             contents=prompt,
             config={"temperature": 0, "max_output_tokens": 1024, "system_instruction": _CLASSIFY_SYSTEM},
         )
-        import json, re
+        import json
+        import re
         text = re.sub(r"^```(?:json)?\s*", "", (resp.text or "").strip())
         text = re.sub(r"\s*```$", "", text)
         result = json.loads(text)
