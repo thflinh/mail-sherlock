@@ -7,5 +7,14 @@ services:
       - mail_sherlock_mongo:/data/db
     restart: unless-stopped
 
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file: backend/.env
+    depends_on:
+      - mongo
+    restart: unless-stopped
+
 volumes:
   mail_sherlock_mongo:
