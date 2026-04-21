@@ -45,5 +45,5 @@ export default function App() {
 
   if (!ready) return null;
   if (page === "dashboard") return <Dashboard navigate={navigate} />;
-  return <Landing navigate={navigate} />;
+  return <Landing />;
 }
