@@ -264,6 +264,60 @@ def rerank(user_query: str, candidates: list[dict], top_k: int = 5) -> list[dict
         return candidates[:top_k]
 
 
+async def rerank_async(user_query: str, candidates: list[dict], top_k: int = 5) -> list[dict]:
+    """Async version of rerank — uses aio client to avoid blocking the event loop."""
+    if not _client or len(candidates) <= 1:
+        return candidates[:top_k]
+
+    if len(candidates) >= 2:
+        top_score = float(candidates[0].get("score", 0))
+        second_score = float(candidates[1].get("score", 0))
+        if top_score > 0.6 and (top_score - second_score) > 0.15:
+            return candidates[:top_k]
+
+    summaries = []
+    for i, e in enumerate(candidates):
+        body_snippet = extract_relevant_passage(e.get("body") or "", user_query, window=400).replace("\n", " ")
+        date = e.get("date", "unknown date")
+        summaries.append(
+            f'ID {i}: [{date}] From: {e.get("sender","")} '
+            f'| Subject: {e.get("subject","")} '
+            f'| Body: {body_snippet}'
+        )
+
+    prompt = (
+        f'Search query: "{user_query}"\n\n'
+        f"Candidates:\n" + "\n".join(summaries) + "\n\n"
+        "Return a JSON array of the IDs ranked from most to least relevant. Example: [2, 0, 4, 1, 3]"
+    )
+
+    try:
+        response = await _client.aio.models.generate_content(
+            model=_MODEL,
+            contents=prompt,
+            config={
+                "temperature": 0,
+                "max_output_tokens": 1024,
+                "system_instruction": _RERANK_SYSTEM,
+            },
+        )
+        ranked_ids = json.loads(_strip_json(response.text))
+        seen = set()
+        reranked = []
+        for idx in ranked_ids:
+            if isinstance(idx, int) and 0 <= idx < len(candidates) and idx not in seen:
+                reranked.append(candidates[idx])
+                seen.add(idx)
+        for i, c in enumerate(candidates):
+            if i not in seen:
+                reranked.append(c)
+        logger.debug("Re-ranked order: %s", ranked_ids)
+        return reranked[:top_k]
+    except Exception as exc:
+        logger.warning("Gemini rerank_async failed (%s) — using cosine order.", exc)
+        return candidates[:top_k]
+
+
 def synthesize_answer(query: str, results: list[dict]) -> str:
     """Reason across top results and return a direct 2-3 sentence answer with citations.
 
