@@ -39,7 +39,7 @@ from embeddings import (
     encode,
     warmup,
 )
-from agent_search import understand_query, understand_query_async, rerank
+from agent_search import understand_query_async, rerank
 from agent import (
     stream_call as agent_stream_call,
     find_prompt,
