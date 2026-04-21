@@ -39,7 +39,7 @@ from embeddings import (
     encode,
     warmup,
 )
-from agent_search import understand_query_async, rerank
+from agent_search import understand_query_async, rerank_async
 from agent import (
     stream_call as agent_stream_call,
     find_prompt,
@@ -1167,9 +1167,7 @@ async def _semantic_search(
             row["score"] = round(float(scores[i]), 4)
             pre_results.append(row)
 
-        results = await asyncio.get_event_loop().run_in_executor(
-            None, rerank, search_q, pre_results, top_k
-        )
+        results = await rerank_async(search_q, pre_results, top_k)
         if logger.isEnabledFor(logging.DEBUG) and results:
             tops = [round(float(x.get("score", 0)), 4) for x in results[:5]]
             logger.debug("semantic_search pre_k=%s top_scores=%s", pre_k, tops)
