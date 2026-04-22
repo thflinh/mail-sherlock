@@ -95,6 +95,7 @@ export default function Dashboard({ navigate }: Props) {
   const [readerLoading, setReaderLoading] = useState(false);
   const [avatarOpen, setAvatarOpen] = useState(false);
   const chatRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const msgIdRef = useRef(0);
   const historyLoadedRef = useRef(false);
 
@@ -245,6 +246,27 @@ export default function Dashboard({ navigate }: Props) {
     }, 50);
   }
 
+  function openEmailWithContext(email: EmailResult) {
+    setOpenEmailId(email.id);
+    const firstName = email.from.split("@")[0].split(/[\s.]/)[0];
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: ++msgIdRef.current,
+        role: "ai",
+        content: `Now reading **${email.subject}** from ${firstName}. What would you like to know?`,
+        suggestions: [
+          { label: "Summarize this email", query: "Summarize this email" },
+          { label: "Action items?", query: "What are the action items in this email?" },
+          { label: "Key dates or deadlines?", query: "What are the key dates or deadlines?" },
+          { label: "Find similar emails", query: `Find more emails about ${email.subject}` },
+        ],
+        time: nowTime(),
+      },
+    ]);
+    scrollToBottom();
+  }
+
   // Fetch full email when a result card is clicked
   useEffect(() => {
     if (!openEmailId) {
@@ -329,7 +351,8 @@ export default function Dashboard({ navigate }: Props) {
 
   async function sendMessage(text?: string) {
     const msg = (text ?? query).trim();
-    if (!msg || typing) return;
+    if (!msg) { inputRef.current?.focus(); return; }
+    if (typing) return;
     setQuery("");
 
     setMessages((prev) => [
@@ -440,26 +463,36 @@ export default function Dashboard({ navigate }: Props) {
             scrollToBottom();
           } else if (payload.type === "done") {
             const count = metaResults.length;
+            let suggestions: Suggestion[];
+            if (metaMode === "find" && count > 0) {
+              suggestions = [
+                ...metaResults.slice(0, 2).map((r) => ({
+                  label: `Summarize: ${r.subject.slice(0, 32)}${r.subject.length > 32 ? "…" : ""}`,
+                  query: `Summarize the email from ${r.from} about "${r.subject}"`,
+                })),
+                { label: "New search", query: "" },
+              ];
+            } else if (metaMode === "answer" || metaMode === "summarize" || metaMode === "extract") {
+              suggestions = [
+                { label: "More about this email", query: "What else is important in this email?" },
+                { label: "Find similar emails", query: "Find more emails related to this topic" },
+                { label: "New search", query: "" },
+              ];
+            } else if (count === 0) {
+              suggestions = [
+                { label: "Try: invoice or receipt", query: "invoice or receipt from last month" },
+                { label: "Search by sender", query: "emails from my bank" },
+                { label: "New search", query: "" },
+              ];
+            } else {
+              suggestions = [
+                { label: "Filter attachments", query: "Show only emails with attachments" },
+                { label: "Narrow by date", query: "Emails from the last month" },
+                { label: "New search", query: "" },
+              ];
+            }
             setMessages((prev) => {
-              const next = prev.map((m) =>
-                m.id === aiMsgId
-                  ? {
-                      ...m,
-                      suggestions:
-                        count > 0
-                          ? [
-                              { label: "Filter attachments", query: "Show only emails with attachments" },
-                              { label: "Narrow by date", query: "Emails from the last month" },
-                              { label: "New search", query: "Search for a different email" },
-                            ]
-                          : [
-                              { label: "Try different wording", query: "invoice or receipt from last month" },
-                              { label: "Search by sender", query: "emails from my bank" },
-                              { label: "New search", query: "Search for a different email" },
-                            ],
-                    }
-                  : m,
-              );
+              const next = prev.map((m) => (m.id === aiMsgId ? { ...m, suggestions } : m));
               // Persist conversation after each completed exchange
               const savedConvId = activeConvId;
               fetch("/chat/history", {
@@ -607,6 +640,9 @@ export default function Dashboard({ navigate }: Props) {
 
   const userInitials = primaryEmail ? initials(primaryEmail) : "?";
   const firstName = primaryEmail ? primaryEmail.split("@")[0].split(".")[0] : "there";
+  const openEmailResult = openEmailId
+    ? messages.flatMap((m) => m.results ?? []).find((r) => r.id === openEmailId) ?? null
+    : null;
   const accountCount = accounts.length > 0 ? accounts.length : primaryEmail ? 1 : 0;
 
   const topbarLine = (() => {
@@ -1009,8 +1045,8 @@ export default function Dashboard({ navigate }: Props) {
                             className={`db-rc${isOpen ? " db-rc-open" : ""}`}
                             role="button"
                             tabIndex={0}
-                            onClick={() => setOpenEmailId(isOpen ? null : r.id)}
-                            onKeyDown={(e) => e.key === "Enter" && setOpenEmailId(isOpen ? null : r.id)}
+                            onClick={() => isOpen ? setOpenEmailId(null) : openEmailWithContext(r)}
+                            onKeyDown={(e) => e.key === "Enter" && (isOpen ? setOpenEmailId(null) : openEmailWithContext(r))}
                           >
                             <div className="db-rc-top">
                               <span className="db-rc-from">{r.from}</span>
@@ -1072,11 +1108,26 @@ export default function Dashboard({ navigate }: Props) {
           </div>
 
           <div className="db-input-bar">
+            {openEmailResult && (
+              <div className="db-reading-banner">
+                <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden>
+                  <rect x="1" y="1" width="10" height="10" rx="2" stroke="currentColor" strokeWidth="1.4"/>
+                  <line x1="3" y1="4" x2="9" y2="4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+                  <line x1="3" y1="6.5" x2="9" y2="6.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+                  <line x1="3" y1="9" x2="6" y2="9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+                </svg>
+                <span>Asking about: <strong>{openEmailResult.subject}</strong></span>
+                <button type="button" className="db-reading-banner-close" onClick={() => setOpenEmailId(null)} aria-label="Stop reading this email">×</button>
+              </div>
+            )}
             <div className="db-input-wrap">
               <input
+                ref={inputRef}
                 type="text"
                 placeholder={
-                  canSearch
+                  openEmailResult
+                    ? `Ask about "${openEmailResult.subject.slice(0, 40)}…"`
+                    : canSearch
                     ? "Ask me anything about your emails..."
                     : "Connect Gmail to search your mail..."
                 }

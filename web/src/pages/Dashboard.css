@@ -675,6 +675,41 @@
   cursor: not-allowed;
 }
 
+.db-reading-banner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #534ab7;
+  background: var(--primary-soft);
+  border: 0.5px solid var(--accent);
+  border-radius: 8px;
+  padding: 5px 10px;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+.db-reading-banner strong {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 320px;
+  display: inline-block;
+  vertical-align: bottom;
+}
+.db-reading-banner-close {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--muted2);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 2px;
+  flex-shrink: 0;
+}
+.db-reading-banner-close:hover { color: #534ab7; }
+
 .db-input-hint {
   font-size: 11px;
   color: var(--muted2);
