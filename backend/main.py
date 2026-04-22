@@ -1637,6 +1637,17 @@ async def save_chat_history(request: Request, response: Response, body: dict):
     return {"ok": True, "conv_id": conv_id}
 
 
+@app.delete("/chat/history/{conv_id}")
+async def delete_conversation(conv_id: str, request: Request, response: Response):
+    session_id = await _resolve_session(request, response)
+    db = get_db()
+    await db["chat_history"].update_one(
+        {"_id": session_id},
+        {"$pull": {"conversations": {"id": conv_id}}},
+    )
+    return {"ok": True}
+
+
 @app.delete("/chat/history")
 async def clear_chat_history(request: Request, response: Response):
     session_id = await _resolve_session(request, response)

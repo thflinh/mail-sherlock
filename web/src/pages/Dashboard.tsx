@@ -12,7 +12,7 @@ interface Props {
 }
 
 type Suggestion = { label: string; query: string };
-type SidebarTab = "search" | "calendar" | "history";
+type SidebarTab = "history" | "calendar";
 
 type Message = {
   id: number;
@@ -101,14 +101,13 @@ export default function Dashboard({ navigate }: Props) {
   const [emailCount, setEmailCount] = useState(0);
   const [statusLoaded, setStatusLoaded] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [, setSyncError] = useState<string | null>(null);
-  const [, setSyncNeedsReauth] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [syncNeedsReauth, setSyncNeedsReauth] = useState(false);
   const [syncDone, setSyncDone] = useState(false);
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
   const [conversationList, setConversationList] = useState<{ id: string; title: string; updated_at: string }[]>([]);
-  const [sidebarTab, setSidebarTab] = useState<SidebarTab>("search");
-  const [sidebarSearchQuery, setSidebarSearchQuery] = useState("");
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>("history");
   const [calendarMonth, setCalendarMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
@@ -121,6 +120,14 @@ export default function Dashboard({ navigate }: Props) {
   const [eventDescription, setEventDescription] = useState("");
   const [eventSaving, setEventSaving] = useState(false);
   const [eventSaveError, setEventSaveError] = useState<string | null>(null);
+  const [showOnboard, setShowOnboard] = useState(() => localStorage.getItem("mailSherlockHideOnboard") !== "1");
+  const [onboardStep, setOnboardStep] = useState(0);
+  const [onboardDontShow, setOnboardDontShow] = useState(false);
+
+  function closeOnboard() {
+    if (onboardDontShow) localStorage.setItem("mailSherlockHideOnboard", "1");
+    setShowOnboard(false);
+  }
 
   function applyStatusPayload(d: {
     accounts?: string[];
@@ -452,7 +459,7 @@ export default function Dashboard({ navigate }: Props) {
             } else if (count === 0) {
               suggestions = [
                 { label: "Try: invoice or receipt", query: "invoice or receipt from last month" },
-                { label: "Search by sender", query: "emails from my bank" },
+                { label: "Search by sender", query: `emails from "${msg}"` },
                 { label: "New search", query: "" },
               ];
             } else {
@@ -561,6 +568,14 @@ export default function Dashboard({ navigate }: Props) {
     }
   }
 
+  async function handleDeleteConversation(convId: string) {
+    try {
+      await fetch(`/chat/history/${convId}`, { method: "DELETE", headers: authHeaders() });
+    } catch { /* keep UI stable */ }
+    setConversationList((prev) => prev.filter((c) => c.id !== convId));
+    if (activeConvId === convId) clearChat();
+  }
+
   async function handleDeleteEvent(eventId: string) {
     try {
       await deleteEvent(eventId);
@@ -591,15 +606,8 @@ export default function Dashboard({ navigate }: Props) {
 
   const canSearch = statusLoaded && !!primaryEmail;
   const sendDisabled = !query.trim() || typing || !canSearch;
-  const sidebarPanelLabel =
-    sidebarTab === "search" ? "Search" : sidebarTab === "calendar" ? "Calendar" : "History";
+  const sidebarPanelLabel = sidebarTab === "calendar" ? "Calendar" : "History";
   const accountPillLabel = primaryEmail ?? "No account connected";
-  const messageSearchPool = messages.filter((m) => m.role === "user" || m.results?.length);
-  const sidebarSearchResults = sidebarSearchQuery.trim()
-    ? messageSearchPool.filter((m) =>
-        m.content.toLowerCase().includes(sidebarSearchQuery.trim().toLowerCase()),
-      )
-    : [];
   const parsedCalendarEvents = calendarEvents
     .map((e) => ({ ...e, dateObj: new Date(e.date) }))
     .filter((e) => !isNaN(e.dateObj.getTime()));
@@ -633,12 +641,52 @@ export default function Dashboard({ navigate }: Props) {
         </div>
         <div className="db-nav-right">
           {primaryEmail && (
-            <button type="button" className="db-new-conv" onClick={handleSync} disabled={syncing} title="Sync inbox">
-              {syncing ? "Syncing…" : "Sync"}
+            <button
+              type="button"
+              className={`db-sync-nav-btn${syncing ? " is-syncing" : syncDone ? " is-done" : syncError ? " is-err" : ""}`}
+              onClick={handleSync}
+              disabled={syncing}
+              title={syncError ? `Sync failed: ${syncError}` : syncDone ? "Synced — click to re-sync" : "Sync inbox"}
+            >
+              {syncing ? (
+                <>
+                  <span className="db-sync-nav-spin" />
+                  Syncing…
+                </>
+              ) : syncDone ? (
+                <>
+                  <svg width="11" height="11" viewBox="0 0 11 11" fill="none" aria-hidden>
+                    <path d="M1.5 5.5l3 3 5-5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                  Synced
+                </>
+              ) : syncError ? (
+                <>
+                  <span className="db-sync-nav-err">!</span>
+                  Sync
+                </>
+              ) : (
+                <>
+                  <svg width="11" height="11" viewBox="0 0 11 11" fill="none" aria-hidden>
+                    <path d="M9.5 5.5A4 4 0 1 1 7 2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+                    <path d="M7 1v3h3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                  Sync
+                </>
+              )}
             </button>
           )}
           <button type="button" className="db-new-conv" onClick={() => clearChat()}>
             New chat
+          </button>
+          <button
+            type="button"
+            className="db-help-btn"
+            onClick={() => { setOnboardStep(0); setShowOnboard(true); }}
+            title="How to use Mail Sherlock"
+            aria-label="Help"
+          >
+            ?
           </button>
           <div className="db-avatar-wrap">
             <button
@@ -705,13 +753,12 @@ export default function Dashboard({ navigate }: Props) {
             <div className="db-sidebar-tabrow">
               <button
                 type="button"
-                className={`db-sidebar-tabbtn${sidebarTab === "search" ? " active" : ""}`}
-                onClick={() => setSidebarTab("search")}
-                aria-label="Search panel"
+                className={`db-sidebar-tabbtn${sidebarTab === "history" ? " active" : ""}`}
+                onClick={() => setSidebarTab("history")}
+                aria-label="History panel"
               >
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <circle cx="6.3" cy="6.3" r="4.2" stroke="currentColor" strokeWidth="1.5" />
-                  <path d="M9.6 9.6L12.4 12.4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                  <path d="M2.4 4h9.2M2.4 7h9.2M2.4 10h6.2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
                 </svg>
               </button>
               <button
@@ -725,51 +772,9 @@ export default function Dashboard({ navigate }: Props) {
                   <path d="M1.7 5.2h10.6M4.6 1.5v2.2M9.4 1.5v2.2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
                 </svg>
               </button>
-              <button
-                type="button"
-                className={`db-sidebar-tabbtn${sidebarTab === "history" ? " active" : ""}`}
-                onClick={() => setSidebarTab("history")}
-                aria-label="History panel"
-              >
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <path d="M2.4 4h9.2M2.4 7h9.2M2.4 10h6.2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-                </svg>
-              </button>
               <span className="db-sidebar-tablabel">{sidebarPanelLabel}</span>
             </div>
           </div>
-          {sidebarTab === "search" && (
-            <div className="db-sidebar-panel">
-              <input
-                className="db-side-search"
-                value={sidebarSearchQuery}
-                onChange={(e) => setSidebarSearchQuery(e.target.value)}
-                placeholder="Search emails & chats..."
-              />
-              {sidebarSearchQuery.trim() ? (
-                <div className="db-side-list">
-                  {sidebarSearchResults.length === 0 && <div className="db-side-empty">No matches yet</div>}
-                  {sidebarSearchResults.slice(0, 8).map((m) => (
-                    <button
-                      key={m.id}
-                      type="button"
-                      className="db-side-item"
-                      onClick={() =>
-                        chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: "smooth" })
-                      }
-                    >
-                      <div className="db-side-item-title">{m.content.slice(0, 56)}</div>
-                      <div className="db-side-item-meta">
-                        {m.role === "user" ? "Conversation" : "Email results"} · {m.time}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <div className="db-side-empty-hero">Search your emails & chats</div>
-              )}
-            </div>
-          )}
           {sidebarTab === "calendar" && (
             <div className="db-sidebar-panel">
               <div className="db-side-cal-head">
@@ -865,36 +870,48 @@ export default function Dashboard({ navigate }: Props) {
                 const isActive = conv.id === activeConvId;
                 const label = conv.title || "New conversation";
                 return (
-                  <button
-                    key={conv.id}
-                    type="button"
-                    className={`db-side-item${isActive ? " active" : ""}`}
-                    onClick={() => {
-                      if (isActive) {
-                        chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: "smooth" });
-                        return;
-                      }
-                      fetch(`/chat/history/${conv.id}`, { headers: authHeaders() })
-                        .then((r) => r.json())
-                        .then((d: { messages?: { role: string; content: string; time: string; results?: EmailResult[]; mode?: AgentMode }[] }) => {
-                          const saved = d.messages ?? [];
-                          setActiveConvId(conv.id);
-                          setMessages(saved.map((m) => ({
-                            id: ++msgIdRef.current,
-                            role: m.role === "user" ? ("user" as const) : ("ai" as const),
-                            content: m.content,
-                            time: m.time ?? "",
-                            results: m.results,
-                            mode: m.mode,
-                          })));
-                          setTimeout(() => chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: "smooth" }), 50);
-                        })
-                        .catch(() => {});
-                    }}
-                  >
-                    <div className="db-side-item-title">{label.slice(0, 52)}</div>
-                    <div className="db-side-item-meta">{conv.updated_at ? new Date(conv.updated_at).toLocaleDateString() : ""}</div>
-                  </button>
+                  <div key={conv.id} className="db-side-conv-wrap">
+                    <button
+                      type="button"
+                      className={`db-side-item${isActive ? " active" : ""}`}
+                      onClick={() => {
+                        if (isActive) {
+                          chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: "smooth" });
+                          return;
+                        }
+                        fetch(`/chat/history/${conv.id}`, { headers: authHeaders() })
+                          .then((r) => r.json())
+                          .then((d: { messages?: { role: string; content: string; time: string; results?: EmailResult[]; mode?: AgentMode }[] }) => {
+                            const saved = d.messages ?? [];
+                            setActiveConvId(conv.id);
+                            setMessages(saved.map((m) => ({
+                              id: ++msgIdRef.current,
+                              role: m.role === "user" ? ("user" as const) : ("ai" as const),
+                              content: m.content,
+                              time: m.time ?? "",
+                              results: m.results,
+                              mode: m.mode,
+                            })));
+                            setTimeout(() => chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: "smooth" }), 50);
+                          })
+                          .catch(() => {});
+                      }}
+                    >
+                      <div className="db-side-item-title">{label.slice(0, 52)}</div>
+                      <div className="db-side-item-meta">{conv.updated_at ? new Date(conv.updated_at).toLocaleDateString() : ""}</div>
+                    </button>
+                    <button
+                      type="button"
+                      className="db-side-conv-del"
+                      onClick={(e) => { e.stopPropagation(); handleDeleteConversation(conv.id); }}
+                      aria-label="Delete conversation"
+                      title="Delete conversation"
+                    >
+                      <svg width="11" height="11" viewBox="0 0 11 11" fill="none" aria-hidden>
+                        <path d="M1.5 3h8M4 3V2h3v1M4.5 5v3.5M6.5 5v3.5M2.5 3l.5 6h5l.5-6" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    </button>
+                  </div>
                 );
               })}
             </div>
@@ -1130,6 +1147,162 @@ export default function Dashboard({ navigate }: Props) {
           ) : null}
         </aside>
       </div>
+
+      {showOnboard && (
+        <div className="db-onboard-overlay" onClick={closeOnboard}>
+          <div className="db-onboard-popup" onClick={(e) => e.stopPropagation()}>
+            <div className="db-onboard-popup-header">
+              <span className="db-onboard-popup-title">Getting started</span>
+              <button type="button" className="db-onboard-popup-close" onClick={closeOnboard} aria-label="Close">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden>
+                  <line x1="1" y1="1" x2="11" y2="11" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+                  <line x1="11" y1="1" x2="1" y2="11" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+                </svg>
+              </button>
+            </div>
+
+            <div className="db-onboard-popup-body">
+              {onboardStep === 0 && (
+                <div className="db-onboard-slide">
+                  <div className="db-onboard-slide-icon">
+                    <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+                      <circle cx="14" cy="14" r="13" stroke="var(--primary)" strokeWidth="1.5" strokeDasharray="3 3"/>
+                      <path d="M19 14A5 5 0 1 1 16 9.27" stroke="var(--primary)" strokeWidth="1.6" strokeLinecap="round"/>
+                      <path d="M16 8v4h4" stroke="var(--primary)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                  </div>
+                  <h3 className="db-onboard-slide-title">Sync your inbox first</h3>
+                  <p className="db-onboard-slide-desc">
+                    Click <strong>Sync</strong> in the top bar to import your Gmail emails. Mail Sherlock indexes them so you can search by meaning.
+                  </p>
+                  <div className="db-onboard-slide-status">
+                    {syncing && (
+                      <span className="db-onboard-status-row is-syncing">
+                        <span className="db-onboard-spin" /> Syncing your emails…
+                      </span>
+                    )}
+                    {!syncing && (emailCount > 0 || syncDone) && (
+                      <span className="db-onboard-status-row is-done">
+                        <svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden>
+                          <path d="M2 6.5l3.5 3.5 5.5-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                        {emailCount.toLocaleString()} emails indexed
+                      </span>
+                    )}
+                    {!syncing && syncError && (
+                      <span className="db-onboard-status-row is-err">
+                        Sync failed — {syncError}
+                        <button className="db-onboard-retry" onClick={handleSync}>Retry</button>
+                      </span>
+                    )}
+                    {!syncing && syncNeedsReauth && (
+                      <span className="db-onboard-status-row is-err">
+                        Session expired — sign out and sign in again.
+                      </span>
+                    )}
+                    {!syncing && emailCount === 0 && !syncDone && !syncError && !syncNeedsReauth && (
+                      <button className="db-onboard-sync-cta" onClick={() => { handleSync(); }} disabled={!primaryEmail}>
+                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden>
+                          <path d="M10 6A4 4 0 1 1 7.5 2.27" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                          <path d="M7.5 1.5v3h3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                        Sync inbox now
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {onboardStep === 1 && (
+                <div className="db-onboard-slide">
+                  <div className="db-onboard-slide-icon">
+                    <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+                      <circle cx="14" cy="14" r="13" stroke="var(--primary)" strokeWidth="1.5" strokeDasharray="3 3"/>
+                      <circle cx="12" cy="12.5" r="4.5" stroke="var(--primary)" strokeWidth="1.6"/>
+                      <path d="M15.5 16l3.5 3.5" stroke="var(--primary)" strokeWidth="1.6" strokeLinecap="round"/>
+                    </svg>
+                  </div>
+                  <h3 className="db-onboard-slide-title">Ask Sherlock anything</h3>
+                  <p className="db-onboard-slide-desc">
+                    Type a natural-language question in the chat. Sherlock finds emails by meaning, not just keywords.
+                  </p>
+                  <div className="db-onboard-slide-examples">
+                    <span className="db-onboard-example">"emails about invoices from last month"</span>
+                    <span className="db-onboard-example">"messages from my manager about the project"</span>
+                    <span className="db-onboard-example">"any receipts from Amazon"</span>
+                  </div>
+                </div>
+              )}
+
+              {onboardStep === 2 && (
+                <div className="db-onboard-slide">
+                  <div className="db-onboard-slide-icon">
+                    <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+                      <circle cx="14" cy="14" r="13" stroke="var(--primary)" strokeWidth="1.5" strokeDasharray="3 3"/>
+                      <circle cx="14" cy="11" r="3" stroke="var(--primary)" strokeWidth="1.6"/>
+                      <path d="M8 21c0-3.31 2.69-6 6-6s6 2.69 6 6" stroke="var(--primary)" strokeWidth="1.6" strokeLinecap="round"/>
+                    </svg>
+                  </div>
+                  <h3 className="db-onboard-slide-title">Sign out</h3>
+                  <p className="db-onboard-slide-desc">
+                    Click your avatar in the <strong>top-right corner</strong> to open the account menu, then choose <strong>Sign out</strong>.
+                  </p>
+                  <div className="db-onboard-signout-hint">
+                    <div className="db-onboard-hint-avatar">{userInitials}</div>
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
+                      <path d="M5 7h7M9 4.5L11.5 7 9 9.5" stroke="var(--muted2)" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                    <span className="db-onboard-hint-label">Sign out</span>
+                  </div>
+                </div>
+              )}
+
+              <label className="db-onboard-dont-show">
+                <input
+                  type="checkbox"
+                  checked={onboardDontShow}
+                  onChange={(e) => setOnboardDontShow(e.target.checked)}
+                />
+                Don't show this again
+              </label>
+            </div>
+
+            <div className="db-onboard-popup-footer">
+              <div className="db-onboard-dots">
+                {[0, 1, 2].map((i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    className={`db-onboard-dot${onboardStep === i ? " active" : ""}`}
+                    onClick={() => setOnboardStep(i)}
+                    aria-label={`Step ${i + 1}`}
+                  />
+                ))}
+              </div>
+              <div className="db-onboard-nav-btns">
+                {onboardStep > 0 && (
+                  <button type="button" className="db-onboard-nav-btn" onClick={() => setOnboardStep((s) => s - 1)} aria-label="Previous">
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
+                      <path d="M8.5 3L4.5 7l4 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                  </button>
+                )}
+                {onboardStep < 2 ? (
+                  <button type="button" className="db-onboard-nav-btn primary" onClick={() => setOnboardStep((s) => s + 1)} aria-label="Next">
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
+                      <path d="M5.5 3L9.5 7l-4 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                  </button>
+                ) : (
+                  <button type="button" className="db-onboard-nav-btn primary done" onClick={closeOnboard}>
+                    Done
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showAddEventModal && (
         <div className="db-event-modal-overlay" onClick={() => setShowAddEventModal(false)}>

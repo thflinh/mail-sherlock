@@ -48,7 +48,7 @@ export default function Landing() {
       <section className="ls-right">
         <div className="ls-card">
           <p className="ls-card-eyebrow">Sign in</p>
-          <p className="ls-card-title">Welcome back</p>
+          <p className="ls-card-title">Welcome to Mail Sherlock</p>
           <p className="ls-card-sub">
             Connect your Gmail account to start searching your inbox.
           </p>
