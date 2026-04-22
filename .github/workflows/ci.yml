@@ -83,14 +83,17 @@ jobs:
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
+          envs: GH_PAT
           script: |
             set -e
             cd mail-sherlock
-            git pull origin main
+            git pull https://thflinh:$GH_PAT@github.com/thflinh/mail-sherlock.git main
             docker build -t mail-sherlock .
             docker stop mail-sherlock || true
             docker rm mail-sherlock || true
