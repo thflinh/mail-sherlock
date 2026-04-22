@@ -95,6 +95,7 @@ export default function Dashboard({ navigate }: Props) {
   const chatRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const msgIdRef = useRef(0);
+  const historyLoadedRef = useRef(false);
 
   const [gmailEmail, setGmailEmail] = useState<string | null>(null);
   const [emailCount, setEmailCount] = useState(0);
@@ -104,6 +105,8 @@ export default function Dashboard({ navigate }: Props) {
   const [, setSyncNeedsReauth] = useState(false);
   const [syncDone, setSyncDone] = useState(false);
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
+  const [activeConvId, setActiveConvId] = useState<string | null>(null);
+  const [conversationList, setConversationList] = useState<{ id: string; title: string; updated_at: string }[]>([]);
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("search");
   const [sidebarSearchQuery, setSidebarSearchQuery] = useState("");
   const [calendarMonth, setCalendarMonth] = useState(new Date());
@@ -179,19 +182,40 @@ export default function Dashboard({ navigate }: Props) {
   const primaryEmail = gmailEmail;
 
   useEffect(() => {
-    if (!statusLoaded) return;
+    if (!statusLoaded || historyLoadedRef.current) return;
+    historyLoadedRef.current = true;
     const name = primaryEmail ? primaryEmail.split("@")[0].split(".")[0] : null;
-    setMessages([
-      {
-        id: ++msgIdRef.current,
-        role: "ai",
-        content: name
-          ? `Hi ${name}! I'm your Sherlock assistant. Describe any email you're looking for and I'll find it across your connected accounts.`
-          : "Connect your Gmail account to start searching your emails by meaning — not just keywords.",
-        suggestions: undefined,
-        time: nowTime(),
-      },
-    ]);
+    const greeting: Message = {
+      id: ++msgIdRef.current,
+      role: "ai",
+      content: name
+        ? `Hi ${name}! I'm your Sherlock assistant. Describe any email you're looking for and I'll find it across your connected accounts.`
+        : "Connect your Gmail account to start searching your emails by meaning — not just keywords.",
+      suggestions: undefined,
+      time: nowTime(),
+    };
+    fetch("/chat/history", { headers: authHeaders() })
+      .then((r) => r.json())
+      .then((d: { conv_id?: string | null; messages?: { role: string; content: string; time: string; results?: EmailResult[]; mode?: AgentMode }[]; conversations?: { id: string; title: string; updated_at: string }[] }) => {
+        const saved = d.messages ?? [];
+        setActiveConvId(d.conv_id ?? null);
+        setConversationList(d.conversations ?? []);
+        if (saved.length === 0) {
+          setMessages([greeting]);
+        } else {
+          setMessages(
+            saved.map((m) => ({
+              id: ++msgIdRef.current,
+              role: m.role === "user" ? ("user" as const) : ("ai" as const),
+              content: m.content,
+              time: m.time ?? "",
+              results: m.results,
+              mode: m.mode,
+            })),
+          );
+        }
+      })
+      .catch(() => setMessages([greeting]));
   }, [statusLoaded, primaryEmail]);
 
   function scrollToBottom() {
@@ -228,7 +252,7 @@ export default function Dashboard({ navigate }: Props) {
       return;
     }
     setReaderLoading(true);
-    fetch(`/email/${openEmailId}`)
+    fetch(`/email/${openEmailId}`, { headers: authHeaders() })
       .then((r) => r.json())
       .then((d: EmailDetail) => setReaderEmail(d))
       .catch(() => setReaderEmail(null))
@@ -438,9 +462,36 @@ export default function Dashboard({ navigate }: Props) {
                 { label: "New search", query: "" },
               ];
             }
-            setMessages((prev) =>
-              prev.map((m) => (m.id === aiMsgId ? { ...m, suggestions } : m)),
-            );
+            setMessages((prev) => {
+              const next = prev.map((m) => (m.id === aiMsgId ? { ...m, suggestions } : m));
+              // Persist conversation after each completed exchange
+              const savedConvId = activeConvId;
+              fetch("/chat/history", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", ...authHeaders() },
+                body: JSON.stringify({
+                  conv_id: savedConvId,
+                  messages: next.map((m) => ({ role: m.role, content: m.content, time: m.time, results: m.results, mode: m.mode })),
+                }),
+              }).then((r) => r.json()).then((res: { ok?: boolean; conv_id?: string }) => {
+                if (res.ok) {
+                  const returnedId = res.conv_id ?? savedConvId;
+                  if (returnedId && !savedConvId) setActiveConvId(returnedId);
+                  const firstUser = next.find((m) => m.role === "user");
+                  const title = firstUser ? firstUser.content.slice(0, 60) : "";
+                  setConversationList((prev) => {
+                    const idToUse = returnedId ?? savedConvId;
+                    if (!idToUse) return prev;
+                    const exists = prev.find((c) => c.id === idToUse);
+                    if (exists) {
+                      return prev.map((c) => c.id === idToUse ? { ...c, title: title || c.title, updated_at: new Date().toISOString() } : c);
+                    }
+                    return [{ id: idToUse, title, updated_at: new Date().toISOString() }, ...prev];
+                  });
+                }
+              }).catch(() => {});
+              return next;
+            });
           }
         }
       }
@@ -461,6 +512,15 @@ export default function Dashboard({ navigate }: Props) {
   function clearChat(forEmail?: string) {
     const email = forEmail ?? primaryEmail;
     const name = email ? email.split("@")[0].split(".")[0] : null;
+    fetch("/chat/history/new", { method: "POST", headers: authHeaders() })
+      .then((r) => r.json())
+      .then((res: { conv_id?: string }) => {
+        if (res.conv_id) {
+          setActiveConvId(res.conv_id);
+          setConversationList((prev) => [{ id: res.conv_id!, title: "", updated_at: new Date().toISOString() }, ...prev]);
+        }
+      })
+      .catch(() => {});
     setMessages([
       {
         id: ++msgIdRef.current,
@@ -800,22 +860,43 @@ export default function Dashboard({ navigate }: Props) {
           {sidebarTab === "history" && (
             <div className="db-sidebar-panel">
               <div className="db-side-history-group">Recent</div>
-              {messages
-                .slice(-8)
-                .reverse()
-                .map((m) => (
+              {conversationList.length === 0 && <div className="db-side-empty">No conversations yet</div>}
+              {conversationList.map((conv) => {
+                const isActive = conv.id === activeConvId;
+                const label = conv.title || "New conversation";
+                return (
                   <button
-                    key={m.id}
+                    key={conv.id}
                     type="button"
-                    className="db-side-item"
-                    onClick={() =>
-                      chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: "smooth" })
-                    }
+                    className={`db-side-item${isActive ? " active" : ""}`}
+                    onClick={() => {
+                      if (isActive) {
+                        chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: "smooth" });
+                        return;
+                      }
+                      fetch(`/chat/history/${conv.id}`, { headers: authHeaders() })
+                        .then((r) => r.json())
+                        .then((d: { messages?: { role: string; content: string; time: string; results?: EmailResult[]; mode?: AgentMode }[] }) => {
+                          const saved = d.messages ?? [];
+                          setActiveConvId(conv.id);
+                          setMessages(saved.map((m) => ({
+                            id: ++msgIdRef.current,
+                            role: m.role === "user" ? ("user" as const) : ("ai" as const),
+                            content: m.content,
+                            time: m.time ?? "",
+                            results: m.results,
+                            mode: m.mode,
+                          })));
+                          setTimeout(() => chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: "smooth" }), 50);
+                        })
+                        .catch(() => {});
+                    }}
                   >
-                    <div className="db-side-item-title">{m.content.slice(0, 52)}</div>
-                    <div className="db-side-item-meta">{m.time}</div>
+                    <div className="db-side-item-title">{label.slice(0, 52)}</div>
+                    <div className="db-side-item-meta">{conv.updated_at ? new Date(conv.updated_at).toLocaleDateString() : ""}</div>
                   </button>
-                ))}
+                );
+              })}
             </div>
           )}
         </aside>

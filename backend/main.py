@@ -394,7 +394,7 @@ async def _set_account_last_sync(db, account_email: str, ts: int) -> None:
     )
 
 
-async def _incremental_sync_account(db, account_email: str, creds: Credentials) -> int:
+async def _incremental_sync_account(db, account_email: str, creds: Credentials, owner_session: Optional[str] = None) -> int:
     """Incremental fetch for one Gmail account. Returns number of new messages stored."""
     account_email = account_email.strip()
     if not creds.valid:
@@ -443,7 +443,13 @@ async def _incremental_sync_account(db, account_email: str, creds: Credentials) 
         await loop.run_in_executor(None, assign_labels_bulk, emails)
 
         if emails:
-            ops = [UpdateOne({"id": e["id"]}, {"$set": e}, upsert=True) for e in emails]
+            if owner_session:
+                for e in emails:
+                    e["owner_session"] = owner_session
+            ops = [
+                UpdateOne({"id": e["id"], "owner_session": owner_session}, {"$set": e}, upsert=True)
+                for e in emails
+            ]
             await db["emails"].bulk_write(ops, ordered=False)
             await rebuild_chunks_for_emails(db, emails)
 
@@ -468,7 +474,8 @@ async def _incremental_sync(db) -> int:
         creds = await _credentials_from_row(row)
         if not creds:
             continue
-        total += await _incremental_sync_account(db, email, creds)
+        owner_session = row.get("session_id") or None
+        total += await _incremental_sync_account(db, email, creds, owner_session=owner_session)
     return total
 
 
@@ -484,10 +491,20 @@ async def _background_sync_loop():
         await asyncio.sleep(10 * 60)  # 10 minutes
 
 
+async def _ensure_oauth_flow_indexes(db) -> None:
+    try:
+        # Auto-delete flow docs 10 minutes after expires_at
+        await db["oauth_flows"].create_index("expires_at", expireAfterSeconds=0)
+    except PyMongoError as exc:
+        logger.warning("oauth_flows TTL index failed: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await connect_db()
-    await ensure_chunk_indexes(get_db())
+    db = get_db()
+    await ensure_chunk_indexes(db)
+    await _ensure_oauth_flow_indexes(db)
     asyncio.get_event_loop().run_in_executor(None, warmup)  # warm up embedding model
     task = asyncio.create_task(_background_sync_loop())
     yield
@@ -514,8 +531,6 @@ _STATIC_DIR = Path(__file__).parent / "static"
 if (_STATIC_DIR / "assets").exists():
     app.mount("/assets", StaticFiles(directory=str(_STATIC_DIR / "assets")), name="assets")
 
-
-_flows = {}
 
 # BM25 cache: session_id → (BM25Okapi, email_count) — invalidated when email count changes
 _bm25_cache: dict = {}
@@ -577,20 +592,33 @@ def landing_page():
 
 
 @app.post("/auth/logout")
-async def auth_logout():
-    """Remove all stored OAuth tokens and accounts so the user is fully signed out.
+async def auth_logout(request: Request):
+    """Remove the current user's OAuth tokens and Gmail accounts.
 
-    Clears:
-      - MongoDB settings.gmail_accounts (all account rows)
-      - MongoDB settings.oauth_token    (legacy single-token doc)
-      - MongoDB settings.active_account
-      - backend/token.json              (local dev fallback)
+    Only removes rows belonging to the current session — other users are unaffected.
     Does NOT delete indexed emails — those stay cached for a potential re-connect.
     """
+    session_id = await _resolve_session_optional(request)
     db = get_db()
-    await db["settings"].delete_one({"_id": ACCOUNTS_DOC_ID})
-    await db["settings"].delete_one({"_id": TOKEN_DOC_ID})
-    await db["settings"].delete_one({"_id": "active_account"})
+
+    if session_id:
+        # Remove only this user's Gmail account rows from the shared array
+        doc = await db["settings"].find_one({"_id": ACCOUNTS_DOC_ID})
+        rows = (doc or {}).get("accounts") or []
+        kept = [r for r in rows if r.get("session_id") != session_id]
+        await db["settings"].update_one(
+            {"_id": ACCOUNTS_DOC_ID},
+            {"$set": {"accounts": kept}},
+            upsert=True,
+        )
+        await db["settings"].delete_one({"_id": _token_doc_id(session_id)})
+        await db["settings"].delete_one({"_id": f"active_account:{session_id}"})
+    else:
+        # No session — clear legacy single-user docs
+        await db["settings"].delete_one({"_id": ACCOUNTS_DOC_ID})
+        await db["settings"].delete_one({"_id": TOKEN_DOC_ID})
+        await db["settings"].delete_one({"_id": "active_account"})
+
     if TOKEN_FILE.exists():
         try:
             TOKEN_FILE.unlink()
@@ -728,7 +756,17 @@ async def auth_login(request: Request, token: Optional[str] = None):
         prompt="select_account consent",
         access_type="offline",
     )
-    _flows[state] = {"flow": flow, "session_id": session_id}
+    # Persist code_verifier so PKCE token exchange works after flow reconstruction.
+    code_verifier = getattr(flow, "code_verifier", None)
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+    await get_db()["oauth_flows"].insert_one({
+        "_id": state,
+        "session_id": session_id,
+        "client_config": config,
+        "redirect_uri": flow.redirect_uri,
+        "code_verifier": code_verifier,
+        "expires_at": expires_at,
+    })
     resp = RedirectResponse(auth_url)
     # Always stamp the cookie with the resolved session_id so /auth/callback can verify it.
     # When using token auth, session_id is user_id; the cookie carries it through the redirect.
@@ -749,17 +787,19 @@ async def auth_callback(
             "This page only works when Google redirects here after you approve access. "
             'Open http://localhost:8000/ and click "Authorize Gmail", or go to /auth/login.',
         )
-    saved = _flows.pop(state, None)
+    saved = await get_db()["oauth_flows"].find_one_and_delete({"_id": state})
     if not saved:
         return _oauth_error_html(
-            "The sign-in session expired (for example the API restarted). "
-            "Go to http://localhost:8000/auth/login and try again.",
+            "The sign-in session expired or the server restarted mid-flow. "
+            "Go to /auth/login and try again.",
         )
-    if not isinstance(saved, dict) or "flow" not in saved:
-        return _oauth_error_html(
-            "Invalid OAuth state. Go to http://localhost:8000/auth/login and try again.",
-        )
-    flow = saved["flow"]
+    flow = Flow.from_client_config(
+        saved["client_config"],
+        scopes=SCOPES,
+        redirect_uri=saved["redirect_uri"],
+    )
+    if saved.get("code_verifier"):
+        flow.code_verifier = saved["code_verifier"]
     flow_session_id = saved.get("session_id") or ""
     cookie_session_id = _session_id_from_request(request)
     if not cookie_session_id or cookie_session_id != flow_session_id:
@@ -954,10 +994,12 @@ class EventCreate(BaseModel):
 
 
 @app.post("/events")
-async def create_event(event: EventCreate):
+async def create_event(event: EventCreate, request: Request, response: Response):
+    session_id = await _resolve_session(request, response)
     db = get_db()
     doc = {
         "_id": str(uuid.uuid4()),
+        "owner_session": session_id,
         "title": event.title.strip(),
         "date": event.date,
         "time": event.time,
@@ -969,14 +1011,16 @@ async def create_event(event: EventCreate):
     await db["events"].insert_one(doc)
     out = dict(doc)
     out["id"] = out.pop("_id")
+    out.pop("owner_session", None)
     return {"ok": True, "event": out}
 
 
 @app.get("/events")
-async def get_events():
+async def get_events(request: Request, response: Response):
+    session_id = await _resolve_session(request, response)
     db = get_db()
     rows = await db["events"].find(
-        {},
+        {"owner_session": session_id},
         {
             "_id": 1,
             "title": 1,
@@ -997,9 +1041,10 @@ async def get_events():
 
 
 @app.delete("/events/{event_id}")
-async def delete_event(event_id: str):
+async def delete_event(event_id: str, request: Request, response: Response):
+    session_id = await _resolve_session(request, response)
     db = get_db()
-    await db["events"].delete_one({"_id": event_id})
+    await db["events"].delete_one({"_id": event_id, "owner_session": session_id})
     return {"ok": True}
 
 
@@ -1031,8 +1076,8 @@ async def _semantic_search(
             detail=f"MongoDB unavailable (check MONGODB_URI, network, TLS): {e}",
         ) from e
 
-    gmail_auth_email = await _get_stored_gmail_address(db)
-    connected_accounts = await _list_connected_emails(db)
+    connected_accounts = await _list_connected_emails(db, session_id=session_id)
+    gmail_auth_email = connected_accounts[0] if connected_accounts else None
     q = query_text.strip()
     if not q:
         return {"results": [], "gmailAuthEmail": gmail_auth_email, "accounts": connected_accounts}
@@ -1234,11 +1279,11 @@ async def _chat_stream(req: ChatRequest, session_id: str):
     prior_ok = req.context is not None and _context_matches_request(req.context, req.top_k, filters)
 
     db = get_db()
-    gmail_auth_email, connected_accounts, intent = await asyncio.gather(
-        _get_stored_gmail_address(db),
-        _list_connected_emails(db),
+    connected_accounts, intent = await asyncio.gather(
+        _list_connected_emails(db, session_id=session_id),
         understand_query_async(query_text, history=history),
     )
+    gmail_auth_email = connected_accounts[0] if connected_accounts else None
 
     if intent.get("needs_clarification"):
         ctx_out = req.context.model_dump() if prior_ok else None
@@ -1422,10 +1467,11 @@ async def chat(req: ChatRequest, request: Request, response: Response):
 
 
 @app.get("/email/{email_id}")
-async def get_email(email_id: str):
+async def get_email(email_id: str, request: Request, response: Response):
     """Fetch full email content for the in-app reading panel."""
+    session_id = await _resolve_session(request, response)
     db = get_db()
-    doc = await get_email_for_reader(email_id, db)
+    doc = await get_email_for_reader(email_id, db, session_id=session_id)
     if not doc:
         raise HTTPException(status_code=404, detail=f"Email {email_id} not found.")
     return doc
@@ -1438,8 +1484,9 @@ async def get_accounts(request: Request, response: Response):
     db = get_db()
     rows = await _get_gmail_account_rows(db, session_id=session_id)
 
-    # Determine the active account (explicitly set or first in list)
-    active_doc = await db["settings"].find_one({"_id": "active_account"})
+    # Determine the active account (explicitly set or first in list), scoped per session
+    active_doc_id = f"active_account:{session_id}" if session_id else "active_account"
+    active_doc = await db["settings"].find_one({"_id": active_doc_id})
     active_email = (active_doc.get("active") or "").strip() if active_doc else ""
     if not active_email and rows:
         active_email = (rows[0].get("email") or "").strip()
@@ -1450,7 +1497,7 @@ async def get_accounts(request: Request, response: Response):
         if not email:
             continue
         try:
-            email_count = await db["emails"].count_documents({"accountEmail": email})
+            email_count = await db["emails"].count_documents({"accountEmail": email, "owner_session": session_id})
         except PyMongoError:
             email_count = 0
         last_synced = row.get("last_sync_at")  # Unix timestamp or None
@@ -1479,18 +1526,123 @@ async def switch_account(request: Request, response: Response, body: dict):
     if email not in connected:
         raise HTTPException(status_code=404, detail=f"Account {email} not connected")
 
+    active_doc_id = f"active_account:{session_id}" if session_id else "active_account"
     await db["settings"].update_one(
-        {"_id": "active_account"},
+        {"_id": active_doc_id},
         {"$set": {"active": email}},
         upsert=True,
     )
 
     try:
-        email_count = await db["emails"].count_documents({"accountEmail": email})
+        email_count = await db["emails"].count_documents({"accountEmail": email, "owner_session": session_id})
     except PyMongoError:
         email_count = 0
 
     return {"active": email, "emailCount": email_count, "status": "active"}
+
+
+@app.get("/chat/history")
+async def get_chat_history(request: Request, response: Response):
+    session_id = await _resolve_session(request, response)
+    db = get_db()
+    doc = await db["chat_history"].find_one({"_id": session_id})
+    if not doc:
+        return {"conv_id": None, "messages": [], "conversations": []}
+    convs = doc.get("conversations") or []
+    active_id = doc.get("active_conv_id")
+    active_conv = next((c for c in convs if c["id"] == active_id), convs[-1] if convs else None)
+    conv_list = [{"id": c["id"], "title": c.get("title", ""), "updated_at": c.get("updated_at", "")} for c in reversed(convs)]
+    return {
+        "conv_id": active_conv["id"] if active_conv else None,
+        "messages": active_conv["messages"] if active_conv else [],
+        "conversations": conv_list,
+    }
+
+
+@app.get("/chat/history/{conv_id}")
+async def get_chat_history_by_id(conv_id: str, request: Request, response: Response):
+    session_id = await _resolve_session(request, response)
+    db = get_db()
+    doc = await db["chat_history"].find_one({"_id": session_id})
+    convs = (doc or {}).get("conversations") or []
+    conv = next((c for c in convs if c["id"] == conv_id), None)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"messages": conv["messages"]}
+
+
+@app.post("/chat/history/new")
+async def new_chat_conversation(request: Request, response: Response):
+    session_id = await _resolve_session(request, response)
+    db = get_db()
+    conv_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+    new_conv = {"id": conv_id, "title": "", "messages": [], "updated_at": now}
+    await db["chat_history"].update_one(
+        {"_id": session_id},
+        {
+            "$push": {"conversations": {"$each": [new_conv], "$slice": -20}},
+            "$set": {"active_conv_id": conv_id},
+        },
+        upsert=True,
+    )
+    return {"conv_id": conv_id}
+
+
+@app.post("/chat/history")
+async def save_chat_history(request: Request, response: Response, body: dict):
+    session_id = await _resolve_session(request, response)
+    conv_id = body.get("conv_id")
+    messages = body.get("messages") or []
+    db = get_db()
+    now = datetime.utcnow().isoformat()
+    first_user = next((m["content"] for m in messages if m.get("role") == "user"), "")
+    title = first_user[:60] if first_user else ""
+    if not conv_id:
+        conv_id = str(uuid.uuid4())
+        new_conv = {"id": conv_id, "title": title, "messages": messages, "updated_at": now}
+        await db["chat_history"].update_one(
+            {"_id": session_id},
+            {
+                "$push": {"conversations": {"$each": [new_conv], "$slice": -20}},
+                "$set": {"active_conv_id": conv_id},
+            },
+            upsert=True,
+        )
+    else:
+        doc = await db["chat_history"].find_one({"_id": session_id})
+        convs = (doc or {}).get("conversations") or []
+        existing = next((i for i, c in enumerate(convs) if c["id"] == conv_id), None)
+        if existing is not None:
+            kept_title = title or convs[existing].get("title", "")
+            await db["chat_history"].update_one(
+                {"_id": session_id, "conversations.id": conv_id},
+                {"$set": {
+                    "conversations.$.messages": messages,
+                    "conversations.$.updated_at": now,
+                    "conversations.$.title": kept_title,
+                    "active_conv_id": conv_id,
+                }},
+            )
+        else:
+            new_conv = {"id": conv_id, "title": title, "messages": messages, "updated_at": now}
+            await db["chat_history"].update_one(
+                {"_id": session_id},
+                {
+                    "$push": {"conversations": {"$each": [new_conv], "$slice": -20}},
+                    "$set": {"active_conv_id": conv_id},
+                },
+                upsert=True,
+            )
+    return {"ok": True, "conv_id": conv_id}
+
+
+@app.delete("/chat/history")
+async def clear_chat_history(request: Request, response: Response):
+    session_id = await _resolve_session(request, response)
+    db = get_db()
+    await db["chat_history"].delete_one({"_id": session_id})
+    return {"ok": True}
 
 
 @app.get("/health")

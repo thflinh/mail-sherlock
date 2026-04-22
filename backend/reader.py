@@ -128,13 +128,16 @@ def extract_plain_text(body_html: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
-async def get_email_for_reader(email_id: str, db) -> dict | None:
+async def get_email_for_reader(email_id: str, db, session_id: str | None = None) -> dict | None:
     """Retrieve full email from MongoDB and return it ready for the reading panel.
 
     Returns subject, sender, date, bodyHtml (sanitized), bodyText, attachments,
     isUnread, smartLabels, threadId — or None if not found.
     """
-    doc = await db["emails"].find_one({"id": email_id}, {"_id": 0})
+    query: dict = {"id": email_id}
+    if session_id:
+        query["owner_session"] = session_id
+    doc = await db["emails"].find_one(query, {"_id": 0})
     if not doc:
         return None
 
