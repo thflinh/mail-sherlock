@@ -4,10 +4,8 @@ import type { Page } from "../App";
 import iconUrl from "../assets/icon.png";
 import type { AgentMode, EmailDetail, EmailResult } from "../types";
 import { createEvent, deleteEvent, getEvents, type CalendarEvent } from "../api/events";
-import { getAccounts, switchAccount } from "../api/accounts";
 import { logoutSession } from "../api/auth";
-import { authHeaders, authLoginUrl } from "../api/http";
-import type { Account } from "../types";
+import { authHeaders } from "../api/http";
 
 interface Props {
   navigate: (to: Page) => void;
@@ -99,8 +97,6 @@ export default function Dashboard({ navigate }: Props) {
   const msgIdRef = useRef(0);
 
   const [gmailEmail, setGmailEmail] = useState<string | null>(null);
-  /** Connected accounts (order = connection order; [0] is primary for greetings). */
-  const [accounts, setAccounts] = useState<string[]>([]);
   const [emailCount, setEmailCount] = useState(0);
   const [statusLoaded, setStatusLoaded] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -108,11 +104,6 @@ export default function Dashboard({ navigate }: Props) {
   const [, setSyncNeedsReauth] = useState(false);
   const [syncDone, setSyncDone] = useState(false);
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
-  const [switchModalOpen, setSwitchModalOpen] = useState(false);
-  const [accountDetails, setAccountDetails] = useState<Account[]>([]);
-  const [activeAccount, setActiveAccount] = useState<string | null>(null);
-  const [switchingTo, setSwitchingTo] = useState<string | null>(null);
-  const [switchError, setSwitchError] = useState<string | null>(null);
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("search");
   const [sidebarSearchQuery, setSidebarSearchQuery] = useState("");
   const [calendarMonth, setCalendarMonth] = useState(new Date());
@@ -133,15 +124,8 @@ export default function Dashboard({ navigate }: Props) {
     gmailAuthEmail?: string | null;
     emailCount?: number;
   }) {
-    const list: string[] = Array.isArray(d.accounts)
-      ? d.accounts
-      : d.gmailAuthEmail
-        ? [d.gmailAuthEmail]
-        : [];
-    setAccounts(list);
-    const primary = d.gmailAuthEmail ?? list[0] ?? null;
+    const primary = d.gmailAuthEmail ?? (Array.isArray(d.accounts) ? d.accounts[0] : null) ?? null;
     setGmailEmail(primary);
-    setActiveAccount((prev) => prev ?? primary);
     setEmailCount(d.emailCount ?? 0);
   }
 
@@ -183,12 +167,6 @@ export default function Dashboard({ navigate }: Props) {
   }, []);
 
   useEffect(() => {
-    if (!switchModalOpen) return;
-    setSwitchError(null);
-    loadAccountDetails();
-  }, [switchModalOpen]);
-
-  useEffect(() => {
     if (!showAddEventModal) return;
     const base = selectedDate ?? new Date();
     setEventDate(base.toISOString().slice(0, 10));
@@ -198,7 +176,7 @@ export default function Dashboard({ navigate }: Props) {
     setEventSaveError(null);
   }, [showAddEventModal, selectedDate]);
 
-  const primaryEmail = accounts[0] ?? gmailEmail;
+  const primaryEmail = gmailEmail;
 
   useEffect(() => {
     if (!statusLoaded) return;
@@ -308,12 +286,6 @@ export default function Dashboard({ navigate }: Props) {
       }
       const d = await res.json();
       setEmailCount(d.total ?? d.synced ?? 0);
-      if (Array.isArray(d.accounts) && d.accounts.length > 0) {
-        setAccounts(d.accounts);
-      } else if (d.perAccount && typeof d.perAccount === "object") {
-        const keys = Object.keys(d.perAccount as Record<string, unknown>);
-        if (keys.length > 0) setAccounts(keys);
-      }
       if (d.gmailAddress) setGmailEmail(d.gmailAddress);
       else if (Array.isArray(d.accounts) && d.accounts[0]) setGmailEmail(d.accounts[0]);
       setSyncDone(true);
@@ -414,11 +386,10 @@ export default function Dashboard({ navigate }: Props) {
               };
             });
             metaMode = payload.mode as AgentMode;
-            if (Array.isArray(payload.accounts) && (payload.accounts as string[]).length > 0) {
-              setAccounts(payload.accounts as string[]);
-              setGmailEmail((payload.gmailAuthEmail as string) ?? (payload.accounts as string[])[0] ?? null);
-            } else if (payload.gmailAuthEmail) {
+            if (payload.gmailAuthEmail) {
               setGmailEmail(payload.gmailAuthEmail as string);
+            } else if (Array.isArray(payload.accounts) && (payload.accounts as string[])[0]) {
+              setGmailEmail((payload.accounts as string[])[0]);
             }
             setMessages((prev) =>
               prev.map((m) =>
@@ -487,45 +458,6 @@ export default function Dashboard({ navigate }: Props) {
     }
   }
 
-  async function loadAccountDetails() {
-    try {
-      const data = await getAccounts();
-      setAccountDetails(data.accounts);
-      if (data.active) setActiveAccount(data.active);
-    } catch {
-      // Keep existing UI if load fails.
-    }
-  }
-
-  async function handleSwitchAccount(email: string) {
-    if (email === activeAccount || switchingTo) return;
-    setSwitchingTo(email);
-    setSwitchError(null);
-    try {
-      const result = await switchAccount(email);
-      setActiveAccount(result.active);
-      setGmailEmail(result.active);
-      setEmailCount(result.emailCount);
-      setAccounts((prev) => {
-        const rest = prev.filter((a) => a !== result.active);
-        return [result.active, ...rest];
-      });
-      setAccountDetails((prev) =>
-        prev.map((a) => ({
-          ...a,
-          status: a.email === result.active ? "active" : "cached",
-          emailCount: a.email === result.active ? result.emailCount : a.emailCount,
-        })),
-      );
-      setSwitchModalOpen(false);
-      clearChat(result.active);
-    } catch (err) {
-      setSwitchError(err instanceof Error ? err.message : "Switch failed.");
-    } finally {
-      setSwitchingTo(null);
-    }
-  }
-
   function clearChat(forEmail?: string) {
     const email = forEmail ?? primaryEmail;
     const name = email ? email.split("@")[0].split(".")[0] : null;
@@ -583,16 +515,11 @@ export default function Dashboard({ navigate }: Props) {
   const openEmailResult = openEmailId
     ? messages.flatMap((m) => m.results ?? []).find((r) => r.id === openEmailId) ?? null
     : null;
-  const accountCount = accounts.length > 0 ? accounts.length : primaryEmail ? 1 : 0;
-
   const topbarLine = (() => {
     if (!primaryEmail) return "Connect Gmail to get started";
     if (emailCount === 0 && !syncDone)
-      return `${accounts.length > 1 ? `${accounts.length} accounts` : primaryEmail} · Sync your inbox to index emails`;
-    const parts = [
-      `${emailCount.toLocaleString()} emails indexed`,
-      `${accountCount} account${accountCount === 1 ? "" : "s"}`,
-    ];
+      return `${primaryEmail} · Sync your inbox to index emails`;
+    const parts = [`${emailCount.toLocaleString()} emails indexed`];
     if (lastSyncedAt) parts.push(`Last synced ${formatRelativeTime(lastSyncedAt)}`);
     else if (syncDone) parts.push("Last synced just now");
     return parts.join(" · ");
@@ -640,12 +567,16 @@ export default function Dashboard({ navigate }: Props) {
           </div>
           <span className="db-logo-wordmark">Mail Sherlock</span>
         </button>
-        <button type="button" className="db-account-pill" onClick={() => setSwitchModalOpen(true)}>
+        <div className="db-account-pill">
           <span className="db-account-pill-dot" />
           <span className="db-account-pill-text">{accountPillLabel}</span>
-          <span className="db-account-pill-caret">▾</span>
-        </button>
+        </div>
         <div className="db-nav-right">
+          {primaryEmail && (
+            <button type="button" className="db-new-conv" onClick={handleSync} disabled={syncing} title="Sync inbox">
+              {syncing ? "Syncing…" : "Sync"}
+            </button>
+          )}
           <button type="button" className="db-new-conv" onClick={() => clearChat()}>
             New chat
           </button>
@@ -665,22 +596,6 @@ export default function Dashboard({ navigate }: Props) {
                   {accountPillLabel}
                 </div>
                 <div className="db-avatar-divider" />
-                <button
-                  type="button"
-                  className="db-avatar-item"
-                  onClick={() => {
-                    setAvatarOpen(false);
-                    setSwitchModalOpen(true);
-                  }}
-                >
-                  <span className="db-avatar-item-icon">
-                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                      <circle cx="7" cy="4.3" r="2.2" stroke="currentColor" strokeWidth="1.3" />
-                      <path d="M2.4 11.8c.8-2 2.5-3 4.6-3s3.8 1 4.6 3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-                    </svg>
-                  </span>
-                  Accounts
-                </button>
                 <button type="button" className="db-avatar-item" onClick={() => setAvatarOpen(false)}>
                   <span className="db-avatar-item-icon">
                     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -698,14 +613,6 @@ export default function Dashboard({ navigate }: Props) {
                   </span>
                   Settings
                 </button>
-                <a href={authLoginUrl()} className="db-avatar-item" onClick={() => setAvatarOpen(false)}>
-                  <span className="db-avatar-item-icon">
-                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                      <path d="M7 2v10M2 7h10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-                    </svg>
-                  </span>
-                  Connect Gmail
-                </a>
                 <button
                   type="button"
                   className="db-avatar-item db-avatar-signout"
@@ -1188,78 +1095,6 @@ export default function Dashboard({ navigate }: Props) {
         </div>
       )}
 
-      {/* ── Switch Account Modal ── */}
-      {switchModalOpen && (
-        <div className="db-modal-overlay" onClick={() => setSwitchModalOpen(false)}>
-          <div className="db-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="db-modal-header">
-              <span className="db-modal-title">Switch Account</span>
-              <button type="button" className="db-modal-close" onClick={() => setSwitchModalOpen(false)}>
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
-                  <line x1="1" y1="1" x2="13" y2="13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                  <line x1="13" y1="1" x2="1" y2="13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                </svg>
-              </button>
-            </div>
-            <div className="db-modal-body">
-              {(accountDetails.length > 0 ? accountDetails : accounts.map((a) => ({ email: a, status: a === activeAccount ? "active" : "cached", emailCount: a === activeAccount ? emailCount : 0, lastSynced: null } as Account))).map((acc) => {
-                const isActive = acc.email === activeAccount;
-                const dotColor = acc.status === "active" ? "#34A853" : acc.status === "needs_login" ? "#A32D2D" : acc.status === "failed" ? "#A32D2D" : "#888888";
-                const lastSyncLabel = acc.lastSynced
-                  ? formatRelativeTime(new Date(acc.lastSynced * 1000))
-                  : null;
-                return (
-                  <div key={acc.email} className={`db-modal-account${isActive ? " active" : ""}`}>
-                    <div className="db-modal-acc-row">
-                      <div className="db-acc-dot" style={{ background: dotColor }} />
-                      <div className="db-modal-acc-info">
-                        <div className="db-modal-acc-email">{acc.email}</div>
-                        <div className="db-modal-acc-meta">
-                          {acc.emailCount > 0 ? `${acc.emailCount.toLocaleString()} emails` : "No emails indexed"}
-                          {lastSyncLabel ? ` · Synced ${lastSyncLabel}` : ""}
-                        </div>
-                      </div>
-                      {isActive && <span className="db-modal-badge">active</span>}
-                    </div>
-                    {isActive ? (
-                      <button
-                        type="button"
-                        className="db-modal-sync-btn"
-                        onClick={() => { setSwitchModalOpen(false); handleSync(); }}
-                        disabled={syncing}
-                      >
-                        <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden>
-                          <path d="M10 6A4 4 0 1 1 6 2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-                          <path d="M6 2l2-2M6 2l2 2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                        {syncing ? "Syncing…" : "Sync now"}
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        className="db-modal-switch-to-btn"
-                        onClick={() => handleSwitchAccount(acc.email)}
-                        disabled={switchingTo === acc.email}
-                      >
-                        {switchingTo === acc.email ? "Switching…" : "Switch to this account"}
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-              {switchError && <div className="db-modal-error">{switchError}</div>}
-              <div className="db-modal-divider" />
-              <a href={authLoginUrl()} className="db-modal-add-acc" onClick={() => setSwitchModalOpen(false)}>
-                <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden>
-                  <line x1="6" y1="1" x2="6" y2="11" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-                  <line x1="1" y1="6" x2="11" y2="6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-                </svg>
-                Connect a new Gmail account
-              </a>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
