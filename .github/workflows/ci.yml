@@ -29,7 +29,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "18"
+          node-version: "20"
           cache: "npm"
           cache-dependency-path: web/package-lock.json
       - run: npm ci
@@ -88,6 +88,7 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
+            set -e
             cd mail-sherlock
             git pull origin main
             docker build -t mail-sherlock .
@@ -99,3 +100,5 @@ jobs:
               --env-file backend/.env \
               -p 8000:8000 \
               mail-sherlock
+            sleep 15
+            curl -f http://localhost:8000/ready
