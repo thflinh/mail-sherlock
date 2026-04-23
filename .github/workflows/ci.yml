@@ -103,5 +103,9 @@ jobs:
               --env-file backend/.env \
               -p 8000:8000 \
               mail-sherlock
-            sleep 15
-            curl -f http://localhost:8000/ready
+            for i in $(seq 1 12); do
+              sleep 10
+              curl -sf http://localhost:8000/ready && break
+              echo "Attempt $i/12 failed, retrying..."
+              if [ "$i" -eq 12 ]; then echo "App failed to start"; exit 1; fi
+            done
