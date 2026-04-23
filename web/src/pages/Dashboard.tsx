@@ -21,6 +21,7 @@ type Message = {
   results?: EmailResult[];
   suggestions?: Suggestion[];
   mode?: AgentMode;
+  activeEmailId?: string;
   time: string;
 };
 
@@ -332,6 +333,7 @@ export default function Dashboard({ navigate }: Props) {
     const msg = (text ?? query).trim();
     if (!msg) { inputRef.current?.focus(); return; }
     if (typing) return;
+    const currentEmailId = openEmailId;
     setQuery("");
 
     setMessages((prev) => [
@@ -443,17 +445,36 @@ export default function Dashboard({ navigate }: Props) {
             const count = metaResults.length;
             let suggestions: Suggestion[];
             if (metaMode === "find" && count > 0) {
+              const topSubject = metaResults[0]?.subject ?? "";
+              const topSender = metaResults[0]?.from ?? "";
+              const senderName = topSender.split("@")[0].split(/[\s.]/)[0];
               suggestions = [
-                ...metaResults.slice(0, 2).map((r) => ({
-                  label: `Summarize: ${r.subject.slice(0, 32)}${r.subject.length > 32 ? "…" : ""}`,
-                  query: `Summarize the email from ${r.from} about "${r.subject}"`,
-                })),
+                {
+                  label: "More about this email",
+                  query: topSubject
+                    ? `Tell me more about the email from ${senderName} about "${topSubject}"`
+                    : `Tell me more about the top email`,
+                },
+                {
+                  label: "Find similar emails",
+                  query: topSubject
+                    ? `Find more emails like "${topSubject}"`
+                    : `Find more emails from ${senderName || "this sender"}`,
+                },
                 { label: "New search", query: "" },
               ];
             } else if (metaMode === "answer" || metaMode === "summarize" || metaMode === "extract") {
+              const topSubject = metaResults[0]?.subject ?? "";
+              const topSender = metaResults[0]?.from ?? "";
+              const senderName = topSender.split("@")[0].split(/[\s.]/)[0];
               suggestions = [
                 { label: "More about this email", query: "What else is important in this email?" },
-                { label: "Find similar emails", query: "Find more emails related to this topic" },
+                {
+                  label: "Find similar emails",
+                  query: topSubject
+                    ? `Find more emails like this one about "${topSubject}"`
+                    : `Find more emails from ${senderName || "this sender"}`,
+                },
                 { label: "New search", query: "" },
               ];
             } else if (count === 0) {
@@ -470,7 +491,7 @@ export default function Dashboard({ navigate }: Props) {
               ];
             }
             setMessages((prev) => {
-              const next = prev.map((m) => (m.id === aiMsgId ? { ...m, suggestions } : m));
+              const next = prev.map((m) => (m.id === aiMsgId ? { ...m, suggestions, activeEmailId: currentEmailId ?? undefined } : m));
               // Persist conversation after each completed exchange
               const savedConvId = activeConvId;
               fetch("/chat/history", {
@@ -704,23 +725,6 @@ export default function Dashboard({ navigate }: Props) {
                   {accountPillLabel}
                 </div>
                 <div className="db-avatar-divider" />
-                <button type="button" className="db-avatar-item" onClick={() => setAvatarOpen(false)}>
-                  <span className="db-avatar-item-icon">
-                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                      <path d="M2 11V8.5M5.4 11V6M8.6 11V4M12 11V2.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-                    </svg>
-                  </span>
-                  Insights
-                </button>
-                <button type="button" className="db-avatar-item" onClick={() => setAvatarOpen(false)}>
-                  <span className="db-avatar-item-icon">
-                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                      <circle cx="7" cy="7" r="2.1" stroke="currentColor" strokeWidth="1.3" />
-                      <path d="M7 1.5v1.5M7 11v1.5M1.5 7H3M11 7h1.5M3 3l1 1M10 10l1 1M3 11l1-1M10 4l1-1" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                    </svg>
-                  </span>
-                  Settings
-                </button>
                 <button
                   type="button"
                   className="db-avatar-item db-avatar-signout"
@@ -957,9 +961,16 @@ export default function Dashboard({ navigate }: Props) {
                 <div className={`db-bubble ${msg.role}`}>
                   <span dangerouslySetInnerHTML={{ __html: formatContent(msg.content) }} />
 
-                  {msg.results && msg.results.length > 0 && (
+                  {(() => {
+                    if (!msg.results || msg.results.length === 0) return null;
+                    if (msg.mode === "answer" || msg.mode === "extract") return null;
+                    const resultsToShow = msg.mode === "summarize"
+                      ? msg.results.filter((r) => r.id === msg.activeEmailId).slice(0, 1)
+                      : msg.results;
+                    if (resultsToShow.length === 0) return null;
+                    return (
                     <div className="db-rc-list">
-                      {msg.results.map((r) => {
+                      {resultsToShow.map((r) => {
                         const score = r.score ?? 0;
                         const smartLabels = r.smartLabels ?? [];
                         const isOpen = openEmailId === r.id;
@@ -994,12 +1005,25 @@ export default function Dashboard({ navigate }: Props) {
                         );
                       })}
                     </div>
-                  )}
+                    );
+                  })()}
 
                   {msg.suggestions && (
                     <div className="db-suggestions">
                       {msg.suggestions.map((s) => (
-                        <span key={s.label} className="db-sug" onClick={() => sendMessage(s.query)}>
+                        <span
+                          key={s.label}
+                          className="db-sug"
+                          onClick={() => {
+                            if (!s.query) {
+                              setOpenEmailId(null);
+                              setQuery("");
+                              setTimeout(() => inputRef.current?.focus(), 0);
+                            } else {
+                              sendMessage(s.query);
+                            }
+                          }}
+                        >
                           {s.label}
                         </span>
                       ))}

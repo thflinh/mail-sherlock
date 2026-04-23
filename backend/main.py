@@ -1212,7 +1212,7 @@ async def _semantic_search(
             row["score"] = round(float(scores[i]), 4)
             pre_results.append(row)
 
-        results = await rerank_async(search_q, pre_results, top_k)
+        results = await rerank_async(search_q, pre_results, top_k, keywords=keywords)
         if logger.isEnabledFor(logging.DEBUG) and results:
             tops = [round(float(x.get("score", 0)), 4) for x in results[:5]]
             logger.debug("semantic_search pre_k=%s top_scores=%s", pre_k, tops)
@@ -1385,11 +1385,11 @@ async def _chat_stream(req: ChatRequest, session_id: str):
             ctx_dict = _build_chat_context_dict("answer", candidates, active_id, req.top_k, filters)
 
     elif mode == "summarize":
-        emails_to_summarize = candidates[:5]
-        if (req.active_email_id or "").strip() and not emails_to_summarize:
+        if (req.active_email_id or "").strip():
             doc = await _fetch_email_doc(db, session_id, req.active_email_id.strip())
-            if doc:
-                emails_to_summarize = [doc]
+            emails_to_summarize = [doc] if doc else candidates[:5]
+        else:
+            emails_to_summarize = candidates[:5]
         max_raw = max((len(e.get("body") or "") for e in emails_to_summarize), default=0)
         logger.info("rag_context mode=summarize email_count=%s max_raw_body_len=%s",
                     len(emails_to_summarize), max_raw)

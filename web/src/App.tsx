@@ -4,6 +4,15 @@ import Landing from "./pages/Landing";
 import Dashboard from "./pages/Dashboard";
 import { getSession } from "./api/auth";
 
+const GA_ID = "G-997MB7GN9C";
+
+function sendGtagPageView() {
+  if (typeof window.gtag !== "function") return;
+  const pagePath =
+    window.location.pathname + window.location.search + window.location.hash;
+  window.gtag("config", GA_ID, { page_path: pagePath });
+}
+
 export type Page = "landing" | "dashboard";
 
 export default function App() {
@@ -35,6 +44,11 @@ export default function App() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!ready) return;
+    sendGtagPageView();
+  }, [ready, page]);
 
   function navigate(to: Page) {
     window.location.hash = to === "dashboard" ? "#/dashboard" : "";

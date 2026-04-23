@@ -20,8 +20,8 @@ if not _api_key:
 
 _client = genai.Client(api_key=_api_key) if _api_key else None
 
-# gemini-2.5-flash-lite: best balance of speed and accuracy for structured extraction
-_MODEL = "gemini-2.5-flash-lite"
+# gemini-2.5-flash: better reliability for structured JSON extraction than flash-lite
+_MODEL = "gemini-2.5-flash"
 
 # ── Query understanding ────────────────────────────────────────────────────────
 
@@ -42,8 +42,8 @@ Schema:
   "needs_clarification": false,
   "clarifying_question": null,
   "mode": "<find | answer | summarize | extract | chitchat>",
-  "search_query": "<expanded descriptive query for semantic search — resolve pronouns using history>",
-  "keywords": ["<verbatim words that must appear: names, order numbers, jargon>"],
+  "search_query": "<expanded descriptive query for semantic search — resolve pronouns using history, and include synonyms or related vocabulary that might appear in emails (e.g. 'absence' → 'absence attendance missed session not present')>",
+  "keywords": ["<verbatim words that must appear: names, order numbers, jargon, or key topic words from the query>"],
   "sender": "<sender name or email if mentioned, else null>",
   "date_hint": "<last_week | last_month | last_year | null>",
   "topic": "<one sentence: what the user is currently looking for>",
@@ -97,6 +97,23 @@ def _strip_json(text: str) -> str:
     return text
 
 
+def _parse_ranked_ids(text: str) -> list[int]:
+    """Parse a JSON array of ints from Gemini rerank response.
+
+    Gemini sometimes wraps the array in explanatory text (e.g. 'Here are
+    the rankings: [2, 0, 4]'). Falls back to regex extraction if direct
+    JSON parsing fails.
+    """
+    stripped = _strip_json(text or "")
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError:
+        match = re.search(r"\[[\d,\s]+\]", text or "")
+        if match:
+            return json.loads(match.group())
+        raise
+
+
 def understand_query(user_query: str, history: list[dict] | None = None) -> dict:
     """Call Gemini to understand query intent and detect if clarification is needed.
 
@@ -133,7 +150,11 @@ def understand_query(user_query: str, history: list[dict] | None = None) -> dict
         if not raw:
             logger.warning("Gemini understand_query returned empty response — fallback.")
             return _fallback(user_query)
-        parsed = json.loads(_strip_json(raw))
+        stripped = _strip_json(raw)
+        if not stripped:
+            logger.warning("Gemini understand_query returned no JSON after stripping — fallback.")
+            return _fallback(user_query)
+        parsed = json.loads(stripped)
         upc = parsed.get("uses_prior_context", False)
         if isinstance(upc, str):
             parsed["uses_prior_context"] = upc.strip().lower() in ("true", "1", "yes")
@@ -177,7 +198,11 @@ async def understand_query_async(user_query: str, history: list[dict] | None = N
         if not raw:
             logger.warning("Gemini understand_query returned empty response — fallback.")
             return _fallback(user_query)
-        parsed = json.loads(_strip_json(raw))
+        stripped = _strip_json(raw)
+        if not stripped:
+            logger.warning("Gemini understand_query_async returned no JSON after stripping — fallback.")
+            return _fallback(user_query)
+        parsed = json.loads(stripped)
         upc = parsed.get("uses_prior_context", False)
         if isinstance(upc, str):
             parsed["uses_prior_context"] = upc.strip().lower() in ("true", "1", "yes")
@@ -194,7 +219,7 @@ async def understand_query_async(user_query: str, history: list[dict] | None = N
         return _fallback(user_query)
 
 
-def rerank(user_query: str, candidates: list[dict], top_k: int = 5) -> list[dict]:
+def rerank(user_query: str, candidates: list[dict], top_k: int = 5, keywords: list[str] | None = None) -> list[dict]:
     """Re-rank semantic search candidates by true relevance using Gemini.
 
     Passes subject + sender + snippet to Gemini (not full body) to stay fast.
@@ -204,6 +229,7 @@ def rerank(user_query: str, candidates: list[dict], top_k: int = 5) -> list[dict
         user_query: The original natural language query.
         candidates: Email dicts already sorted by cosine score (best first).
         top_k: Number of results to return.
+        keywords: Specific content keywords from query intent — if present, always re-rank.
 
     Returns:
         top_k email dicts in Gemini-ranked order.
@@ -212,7 +238,9 @@ def rerank(user_query: str, candidates: list[dict], top_k: int = 5) -> list[dict
         return candidates[:top_k]
 
     # Skip rerank when top result is already clearly ahead (saves 1 Gemini call).
-    if len(candidates) >= 2:
+    # But never skip when keywords are present — cosine similarity can't distinguish
+    # specific content like "absence" from other emails by the same sender.
+    if not keywords and len(candidates) >= 2:
         top_score = float(candidates[0].get("score", 0))
         second_score = float(candidates[1].get("score", 0))
         if top_score > 0.6 and (top_score - second_score) > 0.15:
@@ -245,7 +273,7 @@ def rerank(user_query: str, candidates: list[dict], top_k: int = 5) -> list[dict
                 "system_instruction": _RERANK_SYSTEM,
             },
         )
-        ranked_ids = json.loads(_strip_json(response.text))
+        ranked_ids = _parse_ranked_ids(response.text)
         # Build result list in Gemini's order, guard against bad indices
         seen = set()
         reranked = []
@@ -264,12 +292,12 @@ def rerank(user_query: str, candidates: list[dict], top_k: int = 5) -> list[dict
         return candidates[:top_k]
 
 
-async def rerank_async(user_query: str, candidates: list[dict], top_k: int = 5) -> list[dict]:
+async def rerank_async(user_query: str, candidates: list[dict], top_k: int = 5, keywords: list[str] | None = None) -> list[dict]:
     """Async version of rerank — uses aio client to avoid blocking the event loop."""
     if not _client or len(candidates) <= 1:
         return candidates[:top_k]
 
-    if len(candidates) >= 2:
+    if not keywords and len(candidates) >= 2:
         top_score = float(candidates[0].get("score", 0))
         second_score = float(candidates[1].get("score", 0))
         if top_score > 0.6 and (top_score - second_score) > 0.15:
@@ -301,7 +329,7 @@ async def rerank_async(user_query: str, candidates: list[dict], top_k: int = 5) 
                 "system_instruction": _RERANK_SYSTEM,
             },
         )
-        ranked_ids = json.loads(_strip_json(response.text))
+        ranked_ids = _parse_ranked_ids(response.text)
         seen = set()
         reranked = []
         for idx in ranked_ids:
@@ -357,14 +385,36 @@ def synthesize_answer(query: str, results: list[dict]) -> str:
 
 
 def _fallback(user_query: str) -> dict:
+    """Best-effort intent extraction without Gemini, so hard filters still apply."""
+    q = user_query.lower()
+
+    sender = None
+    sender_match = re.search(r"\bfrom\s+([a-z0-9._@+-]+)", q)
+    if sender_match:
+        sender = sender_match.group(1).strip()
+
+    date_hint = None
+    if re.search(r"\blast\s+week\b", q):
+        date_hint = "last_week"
+    elif re.search(r"\blast\s+month\b", q):
+        date_hint = "last_month"
+    elif re.search(r"\blast\s+year\b", q):
+        date_hint = "last_year"
+
+    # Extract meaningful topic words after "about" as keywords
+    keywords = []
+    about_match = re.search(r"\babout\s+(?:my\s+)?([a-z0-9 ]+?)(?:\s+from|\s+in|\s+last|\s*$)", q)
+    if about_match:
+        keywords = [w for w in about_match.group(1).strip().split() if len(w) > 3]
+
     return {
         "needs_clarification": False,
         "clarifying_question": None,
         "mode": "find",
         "search_query": user_query,
-        "keywords": [],
-        "sender": None,
-        "date_hint": None,
+        "keywords": keywords,
+        "sender": sender,
+        "date_hint": date_hint,
         "topic": user_query,
         "search_focus": "any",
         "extract_field": None,
