@@ -242,6 +242,84 @@
   font-weight: 600;
 }
 
+.ls-legal-links {
+  margin-top: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #9a90a4;
+}
+
+.ls-legal-link {
+  color: #8d68bf;
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.ls-legal-link:hover {
+  color: #7a58a8;
+  text-decoration: underline;
+}
+
+.ls-doc-card {
+  max-height: min(82vh, 860px);
+  overflow: auto;
+}
+
+.ls-doc-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #5f5668;
+}
+
+.ls-doc-content h3 {
+  margin: 2px 0 0;
+  font-size: 14px;
+  color: #2b2432;
+}
+
+.ls-doc-content p {
+  margin: 0;
+}
+
+.ls-doc-content a {
+  color: #7a58a8;
+}
+
+.ls-doc-content code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  background: rgba(155, 114, 207, 0.08);
+  border-radius: 6px;
+  padding: 2px 6px;
+  color: #5f3f8b;
+}
+
+.ls-doc-actions {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(220, 168, 204, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ls-doc-link {
+  font-size: 12px;
+  color: #8d68bf;
+  text-decoration: none;
+}
+
+.ls-doc-link:hover {
+  text-decoration: underline;
+}
+
 /* ── Footer ── */
 .ls-footer {
   margin-top: 18px;

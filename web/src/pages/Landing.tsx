@@ -74,6 +74,12 @@ export default function Landing() {
               Your emails are indexed <strong>locally on your machine</strong>. We never send your inbox content to third-party servers.
             </p>
           </div>
+
+          <div className="ls-legal-links">
+            <a href="#/privacy" className="ls-legal-link">Privacy Policy</a>
+            <span aria-hidden="true">·</span>
+            <a href="#/terms" className="ls-legal-link">Terms of Service</a>
+          </div>
         </div>
         <p className="ls-footer">CS4800 class project · Mail Sherlock</p>
       </section>

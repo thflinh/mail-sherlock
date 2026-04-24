@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import "./App.css";
 import Landing from "./pages/Landing";
 import Dashboard from "./pages/Dashboard";
+import Privacy from "./pages/Privacy";
+import Terms from "./pages/Terms";
 import { getSession } from "./api/auth";
 
 const GA_ID = "G-997MB7GN9C";
@@ -13,7 +15,14 @@ function sendGtagPageView() {
   window.gtag("config", GA_ID, { page_path: pagePath });
 }
 
-export type Page = "landing" | "dashboard";
+export type Page = "landing" | "dashboard" | "privacy" | "terms";
+
+function pageFromHash(hash: string): Page {
+  if (hash === "#/dashboard") return "dashboard";
+  if (hash === "#/privacy") return "privacy";
+  if (hash === "#/terms") return "terms";
+  return "landing";
+}
 
 export default function App() {
   const [page, setPage] = useState<Page>("landing");
@@ -23,6 +32,11 @@ export default function App() {
     let cancelled = false;
     async function bootstrap() {
       try {
+        const hashPage = pageFromHash(window.location.hash);
+        if (hashPage === "privacy" || hashPage === "terms") {
+          if (!cancelled) setPage(hashPage);
+          return;
+        }
         const token = localStorage.getItem("mailSherlockAuthToken");
         const [session, status] = await Promise.all([
           token ? getSession(token).catch(() => ({ authenticated: false })) : Promise.resolve({ authenticated: false }),
@@ -46,6 +60,16 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    function onHashChange() {
+      setPage(pageFromHash(window.location.hash));
+    }
+    window.addEventListener("hashchange", onHashChange);
+    return () => {
+      window.removeEventListener("hashchange", onHashChange);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!ready) return;
     sendGtagPageView();
   }, [ready, page]);
@@ -59,5 +83,7 @@ export default function App() {
 
   if (!ready) return null;
   if (page === "dashboard") return <Dashboard navigate={navigate} />;
+  if (page === "privacy") return <Privacy />;
+  if (page === "terms") return <Terms />;
   return <Landing />;
 }
