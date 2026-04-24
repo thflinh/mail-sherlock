@@ -252,9 +252,9 @@ async def _get_gmail_account_rows(db, session_id: Optional[str] = None) -> list[
     if not isinstance(rows, list):
         return []
     valid = [r for r in rows if isinstance(r, dict) and r.get("token_json")]
-    if session_id:
-        return [r for r in valid if r.get("session_id") == session_id]
-    return valid
+    if not session_id:
+        return []
+    return [r for r in valid if r.get("session_id") == session_id]
 
 
 async def _list_connected_emails(db, session_id: Optional[str] = None) -> list[str]:
