@@ -1,5 +1,7 @@
 import numpy as np
 
+# BAAI/bge-base-en-v1.5 — retrieval-optimised, outperforms MiniLM on search benchmarks.
+# Drop-in replacement; produces 768-dim normalised vectors.
 EMBEDDING_DIM: int = 384
 
 _model = None
@@ -43,6 +45,7 @@ def add_embeddings_inplace(docs: list[dict]) -> None:
     Stores:
       emb_subject  — subject only (high signal for topic queries)
       emb_body     — first 1000 chars of body (for "what did X say?" queries)
+      embedding    — alias of emb_subject for backwards compat with old search path
     """
     if not docs:
         return
@@ -55,6 +58,7 @@ def add_embeddings_inplace(docs: list[dict]) -> None:
     for i, d in enumerate(docs):
         d["emb_subject"] = emb_subj[i].astype(np.float32).tolist()
         d["emb_body"]    = emb_body[i].astype(np.float32).tolist()
+        d["embedding"]   = d["emb_subject"]  # backwards compat
 
 
 def warmup() -> None:
@@ -70,3 +74,8 @@ def field_embeddings_ready(docs: list[dict]) -> bool:
     )
 
 
+def embeddings_ready(docs: list[dict]) -> bool:
+    return all(
+        isinstance(d.get("embedding"), list) and len(d["embedding"]) == EMBEDDING_DIM
+        for d in docs
+    )

@@ -39,7 +39,7 @@ export default function Landing() {
 
         <div className="ls-features">
           <div className="ls-feature"><span className="ls-dot" />Semantic search by meaning, not keywords</div>
-          {/* <div className="ls-feature"><span className="ls-dot" />Multi-account Gmail support</div> */}
+          <div className="ls-feature"><span className="ls-dot" />Multi-account Gmail support</div>
           <div className="ls-feature"><span className="ls-dot" />Local-first index for better privacy</div>
           <div className="ls-feature"><span className="ls-dot" />Auto-extracted events and reminders</div>
         </div>
