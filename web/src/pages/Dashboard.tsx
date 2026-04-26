@@ -68,7 +68,6 @@ function formatRelativeTime(d: Date): string {
   return d.toLocaleDateString();
 }
 
-const FILTER_CHIPS = ["All", "Has attachment", "Unread", "Last 30 days"] as const;
 const WEEKDAY_LABELS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
 
 function isSameDay(a: Date, b: Date) {
@@ -87,8 +86,7 @@ export default function Dashboard({ navigate }: Props) {
   const [query, setQuery] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [typing, setTyping] = useState(false);
-  const [activeFilters, setActiveFilters] = useState<Set<string>>(new Set(["All"]));
-  // openEmailId: email currently open in the in-app reader panel
+// openEmailId: email currently open in the in-app reader panel
   const [openEmailId, setOpenEmailId] = useState<string | null>(null);
   const [readerEmail, setReaderEmail] = useState<EmailDetail | null>(null);
   const [readerLoading, setReaderLoading] = useState(false);
@@ -287,19 +285,6 @@ export default function Dashboard({ navigate }: Props) {
     }
   }
 
-  function toggleFilter(filter: string) {
-    setActiveFilters((prev) => {
-      const next = new Set(prev);
-      if (filter === "All") {
-        return new Set(["All"]);
-      }
-      if (next.has(filter)) next.delete(filter);
-      else next.add(filter);
-      next.delete("All");
-      if (next.size === 0) next.add("All");
-      return next;
-    });
-  }
 
   async function handleSync() {
     setSyncing(true);
@@ -365,11 +350,6 @@ export default function Dashboard({ navigate }: Props) {
           messages: historyForApi,
           top_k: 5,
           active_email_id: openEmailId ?? undefined,
-          filters: {
-            has_attachment: activeFilters.has("Has attachment"),
-            unread_only: activeFilters.has("Unread"),
-            last_30_days: activeFilters.has("Last 30 days"),
-          },
         }),
       });
       if (!res.ok) throw new Error(`Server error ${res.status}`);
@@ -931,20 +911,6 @@ export default function Dashboard({ navigate }: Props) {
                 </h1>
                 <p className="db-topbar-sub">{topbarLine}</p>
               </div>
-            </div>
-            <div className="db-chips">
-              {FILTER_CHIPS.map((chip) => (
-                <div
-                  key={chip}
-                  className={`db-chip${activeFilters.has(chip) ? " active" : ""}`}
-                  onClick={() => toggleFilter(chip)}
-                  onKeyDown={(e) => e.key === "Enter" && toggleFilter(chip)}
-                  role="button"
-                  tabIndex={0}
-                >
-                  {chip}
-                </div>
-              ))}
             </div>
           </div>
 
