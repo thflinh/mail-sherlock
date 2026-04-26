@@ -303,11 +303,12 @@ async def _credentials_from_row(row: dict) -> Optional[Credentials]:
 
 
 async def _persist_refreshed_credentials(db, email: str, creds: Credentials) -> None:
-    rows = await _get_gmail_account_rows(db)
+    doc = await db["settings"].find_one({"_id": ACCOUNTS_DOC_ID})
+    rows = list((doc or {}).get("accounts") or [])
     email = email.strip()
     new_rows = []
     for r in rows:
-        if (r.get("email") or "").strip() == email:
+        if isinstance(r, dict) and (r.get("email") or "").strip() == email:
             new_rows.append({**r, "token_json": creds.to_json()})
         else:
             new_rows.append(r)
@@ -380,10 +381,11 @@ def _raw_message_to_doc(raw: dict, account_email: str) -> dict:
 
 
 async def _set_account_last_sync(db, account_email: str, ts: int) -> None:
-    rows = await _get_gmail_account_rows(db)
+    doc = await db["settings"].find_one({"_id": ACCOUNTS_DOC_ID})
+    rows = list((doc or {}).get("accounts") or [])
     new_rows = []
     for r in rows:
-        if (r.get("email") or "").strip() == account_email.strip():
+        if isinstance(r, dict) and (r.get("email") or "").strip() == account_email.strip():
             new_rows.append({**r, "last_sync_at": ts})
         else:
             new_rows.append(r)
