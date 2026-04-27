@@ -45,7 +45,6 @@ def add_embeddings_inplace(docs: list[dict]) -> None:
     Stores:
       emb_subject  — subject only (high signal for topic queries)
       emb_body     — first 1000 chars of body (for "what did X say?" queries)
-      embedding    — alias of emb_subject for backwards compat with old search path
     """
     if not docs:
         return
@@ -58,8 +57,6 @@ def add_embeddings_inplace(docs: list[dict]) -> None:
     for i, d in enumerate(docs):
         d["emb_subject"] = emb_subj[i].astype(np.float32).tolist()
         d["emb_body"]    = emb_body[i].astype(np.float32).tolist()
-        d["embedding"]   = d["emb_subject"]  # backwards compat
-
 
 def warmup() -> None:
     """Load the model into memory now so the first search request is instant."""
@@ -70,12 +67,5 @@ def field_embeddings_ready(docs: list[dict]) -> bool:
     """True if docs have the 3-field embedding structure from the current schema."""
     return all(
         isinstance(d.get("emb_subject"), list) and len(d["emb_subject"]) == EMBEDDING_DIM
-        for d in docs
-    )
-
-
-def embeddings_ready(docs: list[dict]) -> bool:
-    return all(
-        isinstance(d.get("embedding"), list) and len(d["embedding"]) == EMBEDDING_DIM
         for d in docs
     )

@@ -34,7 +34,6 @@ from embeddings import (
     add_embeddings_inplace,
     cosine_similarity,
     document_search_text,
-    embeddings_ready,
     field_embeddings_ready,
     encode,
     warmup,
@@ -505,6 +504,10 @@ async def lifespan(app: FastAPI):
     db = get_db()
     await ensure_chunk_indexes(db)
     await _ensure_oauth_flow_indexes(db)
+    try:
+        await db["emails"].create_index("owner_session")
+    except PyMongoError as exc:
+        logger.warning("emails owner_session index failed: %s", exc)
     asyncio.get_event_loop().run_in_executor(None, warmup)  # warm up embedding model
     task = asyncio.create_task(_background_sync_loop())
     yield
@@ -1167,9 +1170,6 @@ async def _semantic_search(
                 sem_scores = subj_scores  # sender already hard-filtered above
             else:
                 sem_scores = 0.5 * subj_scores + 0.5 * body_scores
-        elif embeddings_ready(candidates):
-            email_vecs = np.asarray([e["embedding"] for e in candidates], dtype=np.float32)
-            sem_scores = cosine_similarity(query_vec, email_vecs)
         else:
             bodies = [document_search_text(e) for e in candidates]
             sem_scores = cosine_similarity(query_vec, encode(bodies))
