@@ -249,7 +249,7 @@ def rerank(user_query: str, candidates: list[dict], top_k: int = 5, keywords: li
     # Build summaries with more context so Gemini can distinguish similar emails
     summaries = []
     for i, e in enumerate(candidates):
-        body_snippet = extract_relevant_passage(e.get("body") or "", user_query, window=400).replace("\n", " ")
+        body_snippet = extract_relevant_passage(e.get("body") or e.get("snippet") or "", user_query, window=400).replace("\n", " ")
         date = e.get("date", "unknown date")
         summaries.append(
             f'ID {i}: [{date}] From: {e.get("sender","")} '
@@ -305,7 +305,7 @@ async def rerank_async(user_query: str, candidates: list[dict], top_k: int = 5, 
 
     summaries = []
     for i, e in enumerate(candidates):
-        body_snippet = extract_relevant_passage(e.get("body") or "", user_query, window=400).replace("\n", " ")
+        body_snippet = extract_relevant_passage(e.get("body") or e.get("snippet") or "", user_query, window=400).replace("\n", " ")
         date = e.get("date", "unknown date")
         summaries.append(
             f'ID {i}: [{date}] From: {e.get("sender","")} '
