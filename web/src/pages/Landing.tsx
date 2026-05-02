@@ -39,7 +39,7 @@ export default function Landing() {
 
         <div className="ls-features">
           <div className="ls-feature"><span className="ls-dot" />Semantic search by meaning, not keywords</div>
-          <div className="ls-feature"><span className="ls-dot" />Multi-account Gmail support</div>
+          {/* <div className="ls-feature"><span className="ls-dot" />Multi-account Gmail support</div> */}
           <div className="ls-feature"><span className="ls-dot" />Local-first index for better privacy</div>
           <div className="ls-feature"><span className="ls-dot" />Auto-extracted events and reminders</div>
         </div>
@@ -71,7 +71,7 @@ export default function Landing() {
               <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
             </svg>
             <p className="ls-privacy">
-              Your emails are indexed <strong>locally on your machine</strong>. We never send your inbox content to third-party servers.
+              We store only email <strong>metadata and search indexes</strong>. Email content is fetched directly from Gmail when you use AI features and is never saved on our servers.
             </p>
           </div>
 

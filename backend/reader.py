@@ -128,7 +128,9 @@ def extract_plain_text(body_html: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
-async def get_email_for_reader(email_id: str, db, session_id: str | None = None) -> dict | None:
+async def get_email_for_reader(
+    email_id: str, db, session_id: str | None = None, body_override: str = ""
+) -> dict | None:
     """Retrieve full email from MongoDB and return it ready for the reading panel.
 
     Returns subject, sender, date, bodyHtml (sanitized), bodyText, attachments,
@@ -142,7 +144,7 @@ async def get_email_for_reader(email_id: str, db, session_id: str | None = None)
         return None
 
     raw_html = doc.get("bodyHtml") or ""
-    body_text = doc.get("body") or ""
+    body_text = body_override or doc.get("body") or ""
 
     # If bodyHtml is absent but body contains HTML, promote it
     if not raw_html and re.search(r"<(html|body|div|table|td|p|br)\b", body_text, re.IGNORECASE):

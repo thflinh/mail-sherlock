@@ -34,7 +34,6 @@ from embeddings import (
     add_embeddings_inplace,
     cosine_similarity,
     document_search_text,
-    embeddings_ready,
     field_embeddings_ready,
     encode,
     warmup,
@@ -319,6 +318,40 @@ async def _persist_refreshed_credentials(db, email: str, creds: Credentials) -> 
     )
 
 
+async def _fetch_body_from_gmail(
+    db, session_id: str, email_id: str, account_email: str
+) -> str:
+    """Fetch a single email's plain-text body from Gmail on demand for AI features."""
+    rows = await _get_gmail_account_rows(db, session_id=session_id)
+    row = next(
+        (r for r in rows if (r.get("email") or "").strip() == account_email),
+        rows[0] if rows else None,
+    )
+    if not row:
+        return ""
+    creds = await _credentials_from_row(row)
+    if not creds:
+        return ""
+    if creds.expired and creds.refresh_token:
+        try:
+            creds.refresh(GoogleRequest())
+            await _persist_refreshed_credentials(db, account_email, creds)
+        except Exception:
+            return ""
+
+    def _do_fetch():
+        svc = build("gmail", "v1", credentials=creds)
+        raw = svc.users().messages().get(userId="me", id=email_id, format="full").execute()
+        return _extract_body(raw.get("payload", {}))
+
+    loop = asyncio.get_running_loop()
+    try:
+        return await loop.run_in_executor(None, _do_fetch)
+    except Exception as exc:
+        logger.warning("_fetch_body_from_gmail failed for %s: %s", email_id, exc)
+        return ""
+
+
 def _oauth_error_html(message: str, status_code: int = 400) -> HTMLResponse:
     try:
         body = OAUTH_ERROR_FILE.read_text(encoding="utf-8")
@@ -448,12 +481,13 @@ async def _incremental_sync_account(db, account_email: str, creds: Credentials, 
             if owner_session:
                 for e in emails:
                     e["owner_session"] = owner_session
+            for e in emails:
+                e.pop("body", None)
             ops = [
                 UpdateOne({"id": e["id"], "owner_session": owner_session}, {"$set": e}, upsert=True)
                 for e in emails
             ]
             await db["emails"].bulk_write(ops, ordered=False)
-            await rebuild_chunks_for_emails(db, emails)
 
         await _set_account_last_sync(db, account_email, int(time.time()))
         logger.info("Auto-sync [%s]: upserted %d new email(s).", account_email, len(emails))
@@ -507,6 +541,10 @@ async def lifespan(app: FastAPI):
     db = get_db()
     await ensure_chunk_indexes(db)
     await _ensure_oauth_flow_indexes(db)
+    try:
+        await db["emails"].create_index("owner_session")
+    except PyMongoError as exc:
+        logger.warning("emails owner_session index failed: %s", exc)
     asyncio.get_event_loop().run_in_executor(None, warmup)  # warm up embedding model
     task = asyncio.create_task(_background_sync_loop())
     yield
@@ -1169,9 +1207,6 @@ async def _semantic_search(
                 sem_scores = subj_scores  # sender already hard-filtered above
             else:
                 sem_scores = 0.5 * subj_scores + 0.5 * body_scores
-        elif embeddings_ready(candidates):
-            email_vecs = np.asarray([e["embedding"] for e in candidates], dtype=np.float32)
-            sem_scores = cosine_similarity(query_vec, email_vecs)
         else:
             bodies = [document_search_text(e) for e in candidates]
             sem_scores = cosine_similarity(query_vec, encode(bodies))
@@ -1184,7 +1219,7 @@ async def _semantic_search(
             bm25 = cached[0]
         else:
             tokenized_corpus = [
-                (e.get("subject", "") + " " + e.get("body", "")).lower().split()
+                (e.get("subject", "") + " " + e.get("snippet", "")).lower().split()
                 for e in candidates
             ]
             bm25 = BM25Okapi(tokenized_corpus)
@@ -1374,6 +1409,10 @@ async def _chat_stream(req: ChatRequest, session_id: str):
             yield _sse({"type": "token", "text": "I couldn't find a relevant email to answer that question from."})
             yield _sse({"type": "done"})
             return
+        if not email_doc.get("body"):
+            fetched = await _fetch_body_from_gmail(db, session_id, email_doc["id"], email_doc.get("accountEmail", ""))
+            if fetched:
+                email_doc = {**email_doc, "body": fetched}
         top_score = float(candidates[0].get("score", 0)) if candidates else None
         email_llm, pmeta, cmeta = await _augment_email_body_for_llm(db, email_doc, query_text)
         log_rag_passage_context("answer", str(email_doc.get("id")), pmeta,
@@ -1392,6 +1431,14 @@ async def _chat_stream(req: ChatRequest, session_id: str):
             emails_to_summarize = [doc] if doc else candidates[:5]
         else:
             emails_to_summarize = candidates[:5]
+        enriched = []
+        for e in emails_to_summarize:
+            if not e.get("body"):
+                fetched = await _fetch_body_from_gmail(db, session_id, e["id"], e.get("accountEmail", ""))
+                enriched.append({**e, "body": fetched} if fetched else e)
+            else:
+                enriched.append(e)
+        emails_to_summarize = enriched
         max_raw = max((len(e.get("body") or "") for e in emails_to_summarize), default=0)
         logger.info("rag_context mode=summarize email_count=%s max_raw_body_len=%s",
                     len(emails_to_summarize), max_raw)
@@ -1421,6 +1468,10 @@ async def _chat_stream(req: ChatRequest, session_id: str):
             yield _sse({"type": "token", "text": "I couldn't find a relevant email to extract from."})
             yield _sse({"type": "done"})
             return
+        if not email_doc.get("body"):
+            fetched = await _fetch_body_from_gmail(db, session_id, email_doc["id"], email_doc.get("accountEmail", ""))
+            if fetched:
+                email_doc = {**email_doc, "body": fetched}
         passage_q = f"{extract_field} {query_text}"
         top_score = float(candidates[0].get("score", 0)) if candidates else None
         email_llm, pmeta, cmeta = await _augment_email_body_for_llm(db, email_doc, passage_q)
@@ -1473,7 +1524,14 @@ async def get_email(email_id: str, request: Request, response: Response):
     """Fetch full email content for the in-app reading panel."""
     session_id = await _resolve_session(request, response)
     db = get_db()
-    doc = await get_email_for_reader(email_id, db, session_id=session_id)
+    meta = await db["emails"].find_one(
+        {"id": email_id, "owner_session": session_id},
+        {"accountEmail": 1, "_id": 0},
+    )
+    body = ""
+    if meta:
+        body = await _fetch_body_from_gmail(db, session_id, email_id, meta.get("accountEmail", ""))
+    doc = await get_email_for_reader(email_id, db, session_id=session_id, body_override=body)
     if not doc:
         raise HTTPException(status_code=404, detail=f"Email {email_id} not found.")
     return doc
@@ -1796,11 +1854,12 @@ async def _sync_account_bulk(db, account_email: str, creds: Credentials, max_res
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, add_embeddings_inplace, emails)
     await loop.run_in_executor(None, assign_labels_bulk, emails)
+    for e in emails:
+        e.pop("body", None)
     try:
         if emails:
             ops = [UpdateOne({"id": e["id"], "owner_session": owner_session}, {"$set": e}, upsert=True) for e in emails]
             await db["emails"].bulk_write(ops, ordered=False)
-            await rebuild_chunks_for_emails(db, emails)
         await _set_account_last_sync(db, account_email, int(time.time()))
     except PyMongoError as e:
         raise HTTPException(
