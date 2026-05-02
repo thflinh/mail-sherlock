@@ -1523,6 +1523,7 @@
 }
 .db-side-conv-wrap:hover .db-side-conv-del { opacity: 1; }
 .db-side-conv-del:hover { background: rgba(163, 45, 45, 0.08); color: #a32d2d; }
+@media (hover: none) { .db-side-conv-del { opacity: 1; } }
 
 .db-side-event-wrap {
   display: flex;

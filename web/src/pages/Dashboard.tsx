@@ -766,7 +766,8 @@ export default function Dashboard({ navigate }: Props) {
                 aria-label="History panel"
               >
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <path d="M2.4 4h9.2M2.4 7h9.2M2.4 10h6.2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                  <circle cx="7" cy="7" r="5.5" stroke="currentColor" strokeWidth="1.5"/>
+                  <path d="M7 4.5V7l2 1.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>
               </button>
               <button
