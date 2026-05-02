@@ -693,7 +693,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 320px;
+  max-width: min(320px, 50vw);
   display: inline-block;
   vertical-align: bottom;
 }
@@ -916,7 +916,7 @@
 .db-racc   { display: flex; align-items: center; gap: 4px; }
 .db-racc-dot { width: 6px; height: 6px; border-radius: 50%; }
 .db-rsubj  { font-size: 13px; color: var(--text2); margin-bottom: 3px; }
-.db-rsnip  { font-size: 12px; color: var(--muted2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 520px; }
+.db-rsnip  { font-size: 12px; color: var(--muted2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 
 .db-rtags  { display: flex; gap: 6px; margin-top: 8px; align-items: center; flex-wrap: wrap; }
 .db-rtag   { font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 8px; }
@@ -1396,16 +1396,6 @@
   font-size: 13px;
   color: var(--muted2);
   min-width: 480px;
-}
-
-/* ── Responsive ────────────────────────────────── */
-@media (max-width: 768px) {
-  .db-layout { flex-direction: column; }
-  .db-sidebar { display: none; }
-  .db-main { padding: 16px; }
-  .db-stats { grid-template-columns: repeat(2, 1fr); }
-  .db-nav-links { display: none; }
-  .db-reader { display: none; }
 }
 
 /* Dashboard layout refresh */
@@ -2021,4 +2011,96 @@
   background: var(--primary-soft);
   color: var(--primary);
   border-color: var(--accent);
+}
+
+/* ── Hamburger (hidden on desktop) ─────────────── */
+.db-hamburger {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--muted);
+  border-radius: 8px;
+  flex-shrink: 0;
+  transition: background 0.13s, color 0.13s;
+}
+.db-hamburger:hover { background: var(--bg); color: var(--primary); }
+
+/* ── Sidebar backdrop (hidden on desktop) ─────── */
+.db-sidebar-backdrop { display: none; }
+
+/* ── Responsive ────────────────────────────────── */
+@media (max-width: 768px) {
+  .db-layout { flex-direction: column; }
+  .db-hamburger { display: flex; }
+
+  /* Sidebar becomes a slide-in drawer, starting below the nav (nav ≈ 72px at this breakpoint) */
+  .db-sidebar {
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    top: 72px;
+    left: 0;
+    height: calc(100vh - 72px);
+    width: min(280px, 82vw);
+    z-index: 300;
+    transform: translateX(-100%);
+    transition: transform 0.26s cubic-bezier(0.16, 1, 0.3, 1);
+    box-shadow: 4px 0 32px rgba(0, 0, 0, 0.14);
+  }
+  .db-sidebar--open { transform: translateX(0); }
+
+  .db-sidebar-backdrop {
+    display: block;
+    position: fixed;
+    top: 72px;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.28);
+    backdrop-filter: blur(1px);
+    z-index: 299;
+  }
+
+  .db-main { padding: 0; }
+  .db-topbar { padding: 12px 16px 0; }
+  .db-chat-area { padding: 8px 16px 0; }
+  .db-input-bar { padding: 10px 16px 14px; }
+  .db-nav { padding: 10px 16px; }
+  .db-stats { grid-template-columns: repeat(2, 1fr); }
+  .db-nav-links { display: none; }
+  .db-reader { display: none; }
+  .db-bubble { max-width: 88%; }
+  .db-modal { width: min(360px, calc(100vw - 32px)); }
+  .db-event-modal { width: min(360px, calc(100vw - 32px)); }
+  .db-onboard-popup { width: min(360px, calc(100vw - 32px)); }
+  .db-account-pill { max-width: min(420px, calc(100vw - 200px)); }
+}
+
+@media (max-width: 480px) {
+  .db-logo-mark { width: 36px; height: 36px; }
+  .db-logo-wordmark { display: none; }
+  .db-account-pill { display: none; }
+  .db-new-conv { display: none; }
+  .db-sync-nav-label { display: none; }
+  .db-sync-nav-btn { padding: 5px 9px; gap: 0; }
+  .db-nav-right { gap: 6px; }
+  .db-topbar-h1 { font-size: 15px; }
+  .db-topbar-sub { font-size: 11px; }
+  .db-input-bar { padding: 8px 12px 12px; }
+  .db-chat-area { padding: 8px 12px 0; }
+  .db-topbar { padding: 10px 12px 0; }
+
+  /* Nav is 56px at ≤480px (36px logo + 20px padding) */
+  .db-sidebar {
+    top: 56px;
+    height: calc(100vh - 56px);
+  }
+  .db-sidebar-backdrop {
+    top: 56px;
+  }
 }

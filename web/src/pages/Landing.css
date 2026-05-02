@@ -351,3 +351,22 @@
     padding: 20px 20px 36px;
   }
 }
+
+@media (max-width: 480px) {
+  .ls-left {
+    padding: 28px 18px 16px;
+  }
+
+  .ls-right {
+    padding: 12px 14px 28px;
+  }
+
+  .ls-card {
+    padding: 28px 20px 24px;
+    border-radius: 20px;
+  }
+
+  .ls-card-title {
+    font-size: 24px;
+  }
+}

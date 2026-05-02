@@ -70,6 +70,18 @@ function formatRelativeTime(d: Date): string {
 
 const WEEKDAY_LABELS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
 
+function parseLocalDate(dateStr: string): Date {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+
+function toLocalDateStr(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
 function isSameDay(a: Date, b: Date) {
   return (
     a.getFullYear() === b.getFullYear() &&
@@ -91,6 +103,7 @@ export default function Dashboard({ navigate }: Props) {
   const [readerEmail, setReaderEmail] = useState<EmailDetail | null>(null);
   const [readerLoading, setReaderLoading] = useState(false);
   const [avatarOpen, setAvatarOpen] = useState(false);
+  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const chatRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const msgIdRef = useRef(0);
@@ -178,7 +191,7 @@ export default function Dashboard({ navigate }: Props) {
   useEffect(() => {
     if (!showAddEventModal) return;
     const base = selectedDate ?? new Date();
-    setEventDate(base.toISOString().slice(0, 10));
+    setEventDate(toLocalDateStr(base));
     setEventTitle("");
     setEventTime("");
     setEventDescription("");
@@ -610,7 +623,7 @@ export default function Dashboard({ navigate }: Props) {
   const sidebarPanelLabel = sidebarTab === "calendar" ? "Calendar" : "History";
   const accountPillLabel = primaryEmail ?? "No account connected";
   const parsedCalendarEvents = calendarEvents
-    .map((e) => ({ ...e, dateObj: new Date(e.date) }))
+    .map((e) => ({ ...e, dateObj: parseLocalDate(e.date) }))
     .filter((e) => !isNaN(e.dateObj.getTime()));
   const monthStart = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1);
   const calendarStart = new Date(monthStart);
@@ -641,6 +654,16 @@ export default function Dashboard({ navigate }: Props) {
           <span className="db-account-pill-text">{accountPillLabel}</span>
         </div>
         <div className="db-nav-right">
+          <button
+            type="button"
+            className="db-hamburger"
+            onClick={() => setMobileDrawerOpen((o) => !o)}
+            aria-label="Open panel"
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
+              <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
+            </svg>
+          </button>
           {primaryEmail && (
             <button
               type="button"
@@ -652,19 +675,19 @@ export default function Dashboard({ navigate }: Props) {
               {syncing ? (
                 <>
                   <span className="db-sync-nav-spin" />
-                  Syncing…
+                  <span className="db-sync-nav-label">Syncing…</span>
                 </>
               ) : syncDone ? (
                 <>
                   <svg width="11" height="11" viewBox="0 0 11 11" fill="none" aria-hidden>
                     <path d="M1.5 5.5l3 3 5-5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
                   </svg>
-                  Synced
+                  <span className="db-sync-nav-label">Synced</span>
                 </>
               ) : syncError ? (
                 <>
                   <span className="db-sync-nav-err">!</span>
-                  Sync
+                  <span className="db-sync-nav-label">Sync</span>
                 </>
               ) : (
                 <>
@@ -672,7 +695,7 @@ export default function Dashboard({ navigate }: Props) {
                     <path d="M9.5 5.5A4 4 0 1 1 7 2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
                     <path d="M7 1v3h3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
                   </svg>
-                  Sync
+                  <span className="db-sync-nav-label">Sync</span>
                 </>
               )}
             </button>
@@ -732,7 +755,8 @@ export default function Dashboard({ navigate }: Props) {
       </nav>
 
       <div className="db-layout">
-        <aside className="db-sidebar">
+        {mobileDrawerOpen && <div className="db-sidebar-backdrop" onClick={() => setMobileDrawerOpen(false)} />}
+        <aside className={`db-sidebar${mobileDrawerOpen ? " db-sidebar--open" : ""}`}>
           <div className="db-sidebar-tabrail">
             <div className="db-sidebar-tabrow">
               <button
@@ -877,6 +901,7 @@ export default function Dashboard({ navigate }: Props) {
                               mode: m.mode,
                             })));
                             setTimeout(() => chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: "smooth" }), 50);
+                            setMobileDrawerOpen(false);
                           })
                           .catch(() => {});
                       }}
