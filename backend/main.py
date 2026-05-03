@@ -1338,6 +1338,12 @@ async def _chat_stream(req: ChatRequest, session_id: str):
     candidates: list[dict] = []
     preloaded_email: Optional[dict] = None
 
+    # If the user has an email open, treat ambiguous "chitchat" as a question about that email.
+    # e.g. "what is 10 concepts" while reading an email should use answer mode, not chitchat.
+    if mode == "chitchat" and (req.active_email_id or "").strip():
+        mode = "answer"
+        uses_prior = True
+
     if mode == "chitchat":
         ctx_out = req.context.model_dump() if prior_ok else None
         yield _sse({"type": "meta", "mode": "chitchat", "results": [], "intent": intent,
