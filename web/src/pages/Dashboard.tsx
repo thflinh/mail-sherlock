@@ -1089,7 +1089,7 @@ export default function Dashboard({ navigate }: Props) {
         </main>
 
         {/* ── Email Reader Panel ── */}
-        <aside className="db-reader" style={openEmailId ? { width: "360px" } : undefined}>
+        <aside className={`db-reader${openEmailId ? " db-reader--open" : ""}`} style={openEmailId ? { width: "360px" } : undefined}>
           <div className="db-reader-topbar">
             <button
               type="button"

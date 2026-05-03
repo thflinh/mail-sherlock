@@ -2075,6 +2075,19 @@
   .db-stats { grid-template-columns: repeat(2, 1fr); }
   .db-nav-links { display: none; }
   .db-reader { display: none; }
+  .db-reader.db-reader--open {
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    top: 72px;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100% !important;
+    z-index: 310;
+    background: var(--surface);
+    overflow-y: auto;
+  }
   .db-bubble { max-width: 88%; }
   .db-modal { width: min(360px, calc(100vw - 32px)); }
   .db-event-modal { width: min(360px, calc(100vw - 32px)); }
@@ -2101,6 +2114,7 @@
     top: 56px;
     height: calc(100vh - 56px);
   }
+  .db-reader.db-reader--open { top: 56px; }
   .db-sidebar-backdrop {
     top: 56px;
   }
