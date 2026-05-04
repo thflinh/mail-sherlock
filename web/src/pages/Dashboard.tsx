@@ -252,6 +252,7 @@ export default function Dashboard({ navigate }: Props) {
         id: ++msgIdRef.current,
         role: "ai",
         content: `Now reading **${email.subject}** from ${firstName}. What would you like to know?`,
+        activeEmailId: email.id,
         suggestions: [
           { label: "Summarize this email", query: "Summarize this email" },
           { label: "Action items?", query: "What are the action items in this email?" },
@@ -1012,7 +1013,7 @@ export default function Dashboard({ navigate }: Props) {
                               setQuery("");
                               setTimeout(() => inputRef.current?.focus(), 0);
                             } else {
-                              sendMessage(s.query, msg.activeEmailId ?? null);
+                              sendMessage(s.query, msg.activeEmailId);
                             }
                           }}
                         >
