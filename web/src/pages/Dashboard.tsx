@@ -327,11 +327,11 @@ export default function Dashboard({ navigate }: Props) {
     }
   }
 
-  async function sendMessage(text?: string) {
+  async function sendMessage(text?: string, emailId?: string | null) {
     const msg = (text ?? query).trim();
     if (!msg) { inputRef.current?.focus(); return; }
     if (typing) return;
-    const currentEmailId = openEmailId;
+    const currentEmailId = emailId !== undefined ? emailId : openEmailId;
     setQuery("");
 
     setMessages((prev) => [
@@ -362,7 +362,7 @@ export default function Dashboard({ navigate }: Props) {
         body: JSON.stringify({
           messages: historyForApi,
           top_k: 5,
-          active_email_id: openEmailId ?? undefined,
+          active_email_id: currentEmailId ?? undefined,
         }),
       });
       if (!res.ok) throw new Error(`Server error ${res.status}`);
@@ -1012,7 +1012,7 @@ export default function Dashboard({ navigate }: Props) {
                               setQuery("");
                               setTimeout(() => inputRef.current?.focus(), 0);
                             } else {
-                              sendMessage(s.query);
+                              sendMessage(s.query, msg.activeEmailId ?? null);
                             }
                           }}
                         >
