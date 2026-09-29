@@ -14,6 +14,50 @@
               MongoDB Atlas   +   Google Gemini AI
 ```
 
+Production domain: **`https://mailsherlock.space`** (Cloudflare → nginx on EC2).
+
+---
+
+## Redeploy After Deleting EC2
+
+Checked **2026-09-29**: `https://mailsherlock.space/ready` returns **Cloudflare 522** (origin unreachable). Old IP `35.81.149.107:8000` times out. The domain and Cloudflare proxy are still up; only the EC2 origin is gone.
+
+### What must be renewed / updated
+
+| Item | Why it breaks | What to do |
+|---|---|---|
+| **EC2 instance** | Deleted | Launch a new `t3.small` (prefer an **Elastic IP** so the public IP does not change again) |
+| **Cloudflare DNS A record** | Still points at the dead origin IP | Cloudflare → DNS → update A record for `mailsherlock.space` to the **new EC2 public IP** (proxied/orange cloud OK) |
+| **GitHub secret `EC2_HOST`** | SSH deploy target is the old IP | Repo → Settings → Secrets → Actions (and env `ec2-production`) → set to the new IP |
+| **GitHub secret `EC2_SSH_KEY`** | New key pair if you created one | Paste the new `.pem` contents; keep `EC2_USER=ubuntu` |
+| **GitHub secret `GH_PAT`** | Fine-grained / classic PATs expire | Renew if `git pull` in the deploy job fails with auth errors |
+| **`BACKEND_URL` on the server** | OAuth redirect is built as `BACKEND_URL + /auth/callback` | Set `BACKEND_URL=https://mailsherlock.space` in `backend/.env` (not the raw EC2 IP) |
+| **Let's Encrypt / certbot** | Certs lived on the deleted disk | After nginx is up: `sudo certbot --nginx -d mailsherlock.space` |
+| **MongoDB Atlas Network Access** | Old EC2 IP was allowlisted | Add the new EC2 IP, or temporarily `0.0.0.0/0`. Also **Resume** the Atlas cluster if it was paused from inactivity |
+| **Google OAuth redirect URIs** | Old IP URI is dead; domain URI is still valid | Keep `https://mailsherlock.space/auth/callback`. Remove `http://35.81.149.107:8000/auth/callback` if still listed. Keep localhost for local dev |
+| **Gmail user tokens** | OAuth **Testing** refresh tokens expire after ~7 days idle | After redeploy, users must click Connect Gmail again |
+| **`GEMINI_API_KEY`** | Usually still valid | Reuse unless revoked in Google AI Studio |
+| **`GOOGLE_CREDENTIALS_JSON` / `MONGODB_URI`** | Client ID and DB URI do not expire with EC2 | Reuse the same values in the new `backend/.env` |
+
+### Order of operations (shortest path)
+
+1. Launch EC2 + security group (22, 80, 443, optionally 8000) → attach Elastic IP if possible.
+2. Install Docker / nginx / certbot; clone repo; recreate `backend/.env` with:
+   ```env
+   MONGODB_URI=mongodb+srv://...
+   GEMINI_API_KEY=...
+   GOOGLE_CREDENTIALS_JSON={"web":{...}}
+   BACKEND_URL=https://mailsherlock.space
+   DB_MAIL=mail_sherlock
+   ```
+3. `docker build` + `docker run` (see Step 7 below); confirm `curl http://localhost:8000/ready`.
+4. Point Cloudflare A record at the new IP; SSL/TLS mode = **Full** (not Flexible).
+5. Configure nginx for `mailsherlock.space` → `certbot --nginx -d mailsherlock.space`.
+6. Update Atlas IP allowlist + GitHub `EC2_HOST` / `EC2_SSH_KEY`.
+7. Smoke test: `https://mailsherlock.space/ready` → 200, then Gmail OAuth login.
+
+Until steps 1–5 are done, Cloudflare will keep returning **522**. CI deploy alone cannot revive the app — the instance and DNS origin must exist first.
+
 ---
 
 ## Instance Recommendation
