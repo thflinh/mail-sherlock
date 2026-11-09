@@ -1,13 +1,21 @@
 # Deployment Guide
 
+Production: **https://mailsherlock.space**
+
 ## Architecture
 
 ```
-              AWS EC2 (t3.small, Docker)
+              Browser
+                 │ HTTPS
+                 ▼
+              Cloudflare (proxy, SSL mode: Full (strict))
+                 │ HTTPS
+                 ▼
+              AWS EC2 (t3.small, Ubuntu 24.04, Elastic IP)
               ┌─────────────────────────────┐
-              │  nginx (port 80/443)        │  ← HTTPS termination
+              │  nginx (port 80/443)        │  ← Let's Encrypt cert (certbot)
               │    ↓                        │
-              │  FastAPI Backend            │
+              │  Docker: FastAPI Backend    │  ← port 8000
               │  + serves React SPA         │  ← Vite builds to backend/static/
               └────────┬────────────────────┘
                        │
@@ -30,30 +38,9 @@ Use **t3.small** minimum. `torch` + `sentence-transformers` alone consume ~800 M
 
 ## Pre-Deploy Checklist
 
-### 1. Fix the Dockerfile — build frontend inside it
+### 1. Dockerfile builds the frontend ✓ Done
 
-The current `Dockerfile` only installs the Python backend. Add a Node build stage so the React frontend gets built and served:
-
-```dockerfile
-# Stage 1: build frontend
-FROM node:20-slim AS frontend
-WORKDIR /web
-COPY web/package*.json ./
-RUN npm ci
-COPY web/ ./
-RUN npm run build
-
-# Stage 2: Python backend
-FROM python:3.11-slim
-WORKDIR /app
-COPY backend/requirements.txt backend/requirements.txt
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
-RUN pip install --no-cache-dir -r backend/requirements.txt
-COPY backend/ backend/
-COPY --from=frontend /web/../backend/static backend/static
-EXPOSE 8000
-CMD uvicorn main:app --app-dir backend --host 0.0.0.0 --port ${PORT:-8000}
-```
+The `Dockerfile` has a Node stage that builds `web/` into `backend/static/`, then copies it into the Python image.
 
 ### 2. Fix hardcoded MongoDB URI ✓ Done
 
@@ -65,178 +52,246 @@ CMD uvicorn main:app --app-dir backend --host 0.0.0.0 --port ${PORT:-8000}
 
 ---
 
-## Step-by-Step: Launch AWS EC2
+## Step-by-Step: Deploy to AWS EC2
 
-### Step 1 — Launch the instance
+Commands on your PC are for **Git Bash** on Windows. Use forward slashes (`~/.ssh/mail-sherlock.pem`) — backslashes get eaten.
 
-1. Go to [console.aws.amazon.com/ec2](https://console.aws.amazon.com/ec2)
-2. Click **Launch instance**
-3. Configure:
+Check the prompt before running anything:
+- `<you>@<pc> MINGW64` → your PC
+- `ubuntu@ip-...` → the server
+
+### Step 1 — Launch the instance (AWS console)
+
+1. Pick a region (top-right of the console).
+2. EC2 → **Launch instance**:
    - **Name**: `mail-sherlock`
-   - **AMI**: Ubuntu Server 22.04 LTS
-   - **Instance type**: `t3.small`
-   - **Key pair**: create a new one, download the `.pem` file — save it, you can't re-download
-   - **Storage**: 20 GB gp3 (default is 8 GB, not enough for Docker images)
+   - **AMI**: **Ubuntu Server 24.04 LTS (HVM), SSD Volume Type**, architecture **64-bit (x86)**. Not the Ubuntu Pro, SQL Server, or Deep Learning images.
+   - **Instance type**: `t3.small`. Double-check it — the default is `t3.micro` (1 GB), which runs out of memory.
+   - **Key pair**: create new → RSA → `.pem`. Save it as `~/.ssh/mail-sherlock.pem`, never inside the repo. It can't be re-downloaded.
+   - **Storage**: 30 GiB gp3 (Docker images + build cache need the room).
 
-### Step 2 — Configure security group
+### Step 2 — Security group
 
-In the **Network settings** section, add these inbound rules:
+In **Network settings → Edit**, create a security group with:
 
 | Type | Port | Source | Purpose |
 |---|---|---|---|
-| SSH | 22 | My IP | SSH access |
-| HTTP | 80 | 0.0.0.0/0 | Web traffic |
+| SSH | 22 | 0.0.0.0/0 | SSH. Must be open to anywhere: the GitHub Actions deploy job connects from changing IPs. Login is key-only. |
+| HTTP | 80 | 0.0.0.0/0 | Web traffic + certbot challenge |
 | HTTPS | 443 | 0.0.0.0/0 | HTTPS traffic |
-| Custom TCP | 8000 | 0.0.0.0/0 | Direct app access (temporary) |
 
-### Step 3 — SSH into the instance
+Port 8000 stays closed — nginx proxies to it locally.
+
+### Step 3 — Attach an Elastic IP
+
+EC2 → **Elastic IPs** → **Allocate Elastic IP address** → **Actions → Associate** → Instance: `mail-sherlock`. Leave **Private IP address** blank and **Reassociation** unchecked.
+
+A fixed IP means the DNS record, Atlas allowlist, and GitHub secret survive instance stop/start. It's written as `<ELASTIC-IP>` below.
+
+> Wrong instance type? **Instance state → Stop** → **Actions → Instance settings → Change instance type** → **Start**. Disk and Elastic IP are kept.
+
+### Step 4 — SSH in (Git Bash, your PC)
 
 ```bash
-chmod 400 your-key.pem
-ssh -i your-key.pem ubuntu@<EC2-PUBLIC-IP>
+chmod 400 ~/.ssh/mail-sherlock.pem
+ssh -i ~/.ssh/mail-sherlock.pem ubuntu@<ELASTIC-IP>
 ```
 
-The public IP is shown in EC2 → Instances → your instance.
+On the server, confirm the size:
+```bash
+free -h    # Mem total ≈ 1.9Gi on t3.small (≈ 911Mi means t3.micro)
+```
 
-### Step 4 — Install Docker
+### Step 5 — Add 2 GB swap (server)
+
+Safety margin so the torch install and model load don't OOM.
 
 ```bash
-sudo apt update && sudo apt upgrade -y
-sudo apt install -y docker.io docker-compose-v2 git nginx certbot python3-certbot-nginx
-sudo systemctl enable docker
+sudo fallocate -l 2G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+free -h    # Swap: 2.0Gi
+```
+
+### Step 6 — Install Docker, nginx, certbot (server)
+
+```bash
+sudo apt update && sudo DEBIAN_FRONTEND=noninteractive apt upgrade -y
+sudo apt install -y docker.io git nginx certbot python3-certbot-nginx
+sudo systemctl enable --now docker
 sudo usermod -aG docker ubuntu
-newgrp docker
+sudo reboot
 ```
 
-### Step 5 — Clone the repo
+Wait ~30 s, SSH in again (Step 4), then:
+```bash
+docker ps    # empty table, no "permission denied"
+```
+
+### Step 7 — Clone the repo (server)
 
 ```bash
-git clone https://github.com/your-username/mail-sherlock.git
-cd mail-sherlock
+cd ~ && git clone https://github.com/thflinh/mail-sherlock.git
 ```
 
-### Step 6 — Create the .env file on the server
+It must live at `~/mail-sherlock` — the CI deploy job runs `cd mail-sherlock`.
 
-```bash
-nano backend/.env
-```
+### Step 8 — Create `backend/.env` (server)
 
-Paste your environment variables:
+`backend/.env` is gitignored, so it has to be created on the server:
 
 ```env
-MONGODB_URI=mongodb+srv://...
-GEMINI_API_KEY=...
-GOOGLE_CREDENTIALS_JSON={"web":{...}}
-BACKEND_URL=http://<EC2-PUBLIC-IP>:8000
+MONGODB_URI=mongodb+srv://<user>:<password>@<cluster>.mongodb.net/?retryWrites=true&w=majority
 DB_MAIL=mail_sherlock
+GEMINI_API_KEY=...
+HF_TOKEN=...
+GOOGLE_CREDENTIALS_JSON={"web":{...}}
+BACKEND_URL=https://mailsherlock.space
 ```
 
-> Set `BACKEND_URL` to your EC2 IP for now. Update to your domain after HTTPS is set up.
+- **No quotes around values.** `docker run --env-file` passes quotes through literally.
+- **`BACKEND_URL`** must be the public HTTPS domain. The OAuth redirect is built as `BACKEND_URL + /auth/callback`.
+- **`MONGODB_URI`**: Atlas → **Database → Clusters → Connect → Drivers** → copy the `mongodb+srv://` string. Replace `<db_password>` with the *database user's* password (reset it under **Security → Database Access**). URL-encode special characters, or use a letters-and-numbers password.
+- **`GOOGLE_CREDENTIALS_JSON`**: the whole OAuth client JSON on one line.
 
-### Step 7 — Build and run with Docker
+Either paste it in with `nano ~/mail-sherlock/backend/.env`, or prepare the file on your PC (outside the repo) and upload it:
 
 ```bash
-docker build -t mail-sherlock .
+# Git Bash, your PC
+scp -i ~/.ssh/mail-sherlock.pem path/to/prod.env ubuntu@<ELASTIC-IP>:~/mail-sherlock/backend/.env
+```
+
+Verify on the server:
+```bash
+cd ~/mail-sherlock
+sed -i 's/\r$//' backend/.env      # strip Windows line endings
+chmod 600 backend/.env
+cut -d= -f1 backend/.env           # expect the 6 names above
+grep -cE '=["'\'']' backend/.env    # expect 0 (no quoted values)
+grep '^GOOGLE_CREDENTIALS_JSON=' backend/.env | cut -d= -f2- | python3 -m json.tool > /dev/null && echo JSON OK
+```
+
+### Step 9 — MongoDB Atlas network access
+
+Atlas → **Network Access** → **Add IP Address** → `<ELASTIC-IP>/32`. If the cluster shows **Paused**, click **Resume**.
+
+Do this before Step 10, or the container can't reach the database.
+
+### Step 10 — Build and run (server)
+
+```bash
+tmux                               # keeps the build alive if SSH drops; reattach with: tmux attach
+cd ~/mail-sherlock
+docker build -t mail-sherlock .    # ~10 min the first time
 docker run -d \
   --name mail-sherlock \
   --restart unless-stopped \
   --env-file backend/.env \
   -p 8000:8000 \
   mail-sherlock
+docker logs -f mail-sherlock       # wait for "Uvicorn running on http://0.0.0.0:8000", then Ctrl+C
+curl -i http://localhost:8000/ready    # expect 200
 ```
 
-Verify it's running:
-```bash
-docker ps
-curl http://localhost:8000/ready
-```
+### Step 11 — nginx reverse proxy (server)
 
-### Step 8 — Set up nginx as reverse proxy
+Use the repo's `nginx.conf` (disables buffering for SSE streaming, 120 s timeouts for Gemini calls):
 
 ```bash
-sudo nano /etc/nginx/sites-available/mail-sherlock
-```
-
-Paste:
-
-```nginx
-server {
-    listen 80;
-    server_name <EC2-PUBLIC-IP>;  # replace with your domain later
-
-    location / {
-        proxy_pass http://localhost:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_read_timeout 120s;
-    }
-}
-```
-
-Enable it:
-
-```bash
+sudo cp ~/mail-sherlock/nginx.conf /etc/nginx/sites-available/mail-sherlock
+sudo sed -i 's/server_name _;/server_name mailsherlock.space;/' /etc/nginx/sites-available/mail-sherlock
 sudo ln -s /etc/nginx/sites-available/mail-sherlock /etc/nginx/sites-enabled/
-sudo nginx -t
-sudo systemctl reload nginx
+sudo rm /etc/nginx/sites-enabled/default
+sudo nginx -t && sudo systemctl reload nginx
+curl -i -H "Host: mailsherlock.space" http://localhost/ready    # expect 200
 ```
 
-App is now accessible at `http://<EC2-PUBLIC-IP>`.
+### Step 12 — Point Cloudflare DNS at the server (DNS only for now)
 
-### Step 9 — Set up HTTPS with a domain (optional but recommended)
+Cloudflare → `mailsherlock.space` → **DNS → Records**:
+- **A** record `mailsherlock.space` → `<ELASTIC-IP>`, Proxy status **DNS only (grey cloud)**.
+- Delete any other A/AAAA records for the root domain.
 
-If you have a domain name, point its A record to your EC2 IP, then:
+It must be grey for now: with the orange cloud on, Cloudflare redirects HTTP → HTTPS before the request reaches the server, and certbot's check fails.
+
+Verify from your PC:
+```bash
+nslookup mailsherlock.space 1.1.1.1     # expect only <ELASTIC-IP>; 104.21.x / 172.67.x means still proxied
+curl -i http://mailsherlock.space/ready # expect 200 with "Server: nginx"
+```
+
+### Step 13 — HTTPS certificate (server)
 
 ```bash
-sudo certbot --nginx -d yourdomain.com
+sudo certbot --nginx -d mailsherlock.space --redirect --agree-tos --register-unsafely-without-email -n
+sudo certbot renew --dry-run    # expect "all simulated renewals succeeded"
 ```
 
-Certbot auto-configures nginx for HTTPS and auto-renews the certificate.
+Certbot renews automatically. The email is optional (Let's Encrypt no longer sends expiry emails). If you pass `-m`, it must be on a real domain — `example.com` is rejected.
 
-Update `BACKEND_URL` in your `.env`:
-```
-BACKEND_URL=https://yourdomain.com
-```
+### Step 14 — Turn the Cloudflare proxy back on
 
-Then restart the container:
+1. **SSL/TLS → Overview** → encryption mode **Full (strict)**.
+2. **DNS** → the A record → **Proxied (orange cloud)**.
+
 ```bash
-docker restart mail-sherlock
+curl -i https://mailsherlock.space/ready    # expect HTTP/2 200
 ```
 
-### Step 10 — Update Google OAuth redirect URI
+### Step 15 — Google OAuth redirect URI
 
-In Google Cloud Console → Credentials → your OAuth client → Authorized redirect URIs, add:
+Google Cloud Console → **APIs & Services → Credentials** → your OAuth client → **Authorized redirect URIs** must include:
 ```
-http://<EC2-PUBLIC-IP>/auth/callback
+https://mailsherlock.space/auth/callback
 ```
-Or if using a domain:
+Keep `http://localhost:8000/auth/callback` for local dev.
+
+### Step 16 — GitHub Actions deploy secrets (Git Bash, your PC)
+
+Run from the repo folder. Setting secrets needs admin access on the repo.
+
+```bash
+gh secret set EC2_HOST    --env ec2-production --repo thflinh/mail-sherlock --body <ELASTIC-IP>
+gh secret set EC2_SSH_KEY --env ec2-production --repo thflinh/mail-sherlock < ~/.ssh/mail-sherlock.pem
+gh secret set EC2_USER    --env ec2-production --repo thflinh/mail-sherlock --body ubuntu
 ```
-https://yourdomain.com/auth/callback
-```
 
-### Step 11 — MongoDB Atlas IP whitelist
+`GH_PAT` (used by the deploy job's `git pull`) expires. If a deploy fails on `git pull` with an auth error, create a new token and update that secret.
 
-In Atlas → Network Access → Add IP Address:
-- Allow `0.0.0.0/0` (all IPs), or
-- Add your EC2 public IP specifically
+### Step 17 — Test the deploy
 
-### Step 12 — Test the deploy
-
-- [ ] `curl http://<EC2-PUBLIC-IP>/ready` returns 200
-- [ ] OAuth login flow works end-to-end
+- [ ] `https://mailsherlock.space/ready` returns 200
+- [ ] `https://mailsherlock.space` loads the app
+- [ ] Connect Gmail → Google login → back to the app (`redirect_uri_mismatch` → see Step 15)
 - [ ] Emails sync correctly
 - [ ] AI query returns results
 
 ---
 
-## Updating the App (manual)
+## Updating the App
 
-When you push new code and want to redeploy:
+### Automatic (default)
+
+Every push or merge to `main` runs `.github/workflows/ci.yml`. If lint, typecheck, frontend build, and syntax check pass, the `deploy` job SSHes into `EC2_HOST` and runs `git pull` → `docker build` → replaces the container → polls `/ready` for up to 2 minutes.
+
+Watch a run:
+```bash
+gh run watch --repo thflinh/mail-sherlock
+```
+
+- **Downtime:** ~1–2 min per deploy. The old container stops before the new one is ready.
+- **Only code deploys.** `backend/.env` and the nginx config on the server are edited by hand:
+  - After editing `backend/.env`, recreate the container (stop, rm, run — see Manual below). `docker restart` does **not** re-read `--env-file`.
+  - After editing nginx config: `sudo nginx -t && sudo systemctl reload nginx`.
+- **Disk:** each build leaves the previous image behind as `<none>`. Usually tens of MB; ~2–3 GB when `requirements.txt` changes (new torch layer). Free it with `docker image prune -f`, check with `df -h /`.
+
+### Manual (if CI is broken)
 
 ```bash
-ssh -i your-key.pem ubuntu@<EC2-PUBLIC-IP>
-cd mail-sherlock
+ssh -i ~/.ssh/mail-sherlock.pem ubuntu@<ELASTIC-IP>
+cd ~/mail-sherlock
 git pull
 docker build -t mail-sherlock .
 docker stop mail-sherlock && docker rm mail-sherlock
@@ -246,9 +301,25 @@ docker run -d \
   --env-file backend/.env \
   -p 8000:8000 \
   mail-sherlock
+docker image prune -f
 ```
 
-> See `CICD.md` to automate this with GitHub Actions.
+> See `CICD.md` for how the GitHub Actions pipeline is set up.
+
+---
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `Identity file /c/Users/<you>.sshmail-sherlock.pem not accessible` | Backslashes in Git Bash | Use `~/.ssh/mail-sherlock.pem` |
+| `docker ps` → `npipe:////./pipe/dockerDesktopLinuxEngine` | Ran on your PC, not the server | SSH in first; prompt must be `ubuntu@...` |
+| `free -h` shows ~911Mi | Instance is `t3.micro` | Change instance type (note under Step 3) |
+| `curl http://mailsherlock.space/...` → `301` with `Server: cloudflare` | Cloudflare proxy still on | Step 12: grey cloud |
+| Cloudflare error 522 | Origin unreachable | Instance running? A record = Elastic IP? Ports 80/443 open? |
+| certbot: "invalid email address" | Placeholder email | Use `--register-unsafely-without-email` |
+| Container logs show MongoDB timeout | Atlas allowlist missing or cluster paused | Step 9 |
+| Google `redirect_uri_mismatch` | Redirect URI missing or wrong `BACKEND_URL` | Steps 15 and 8 |
 
 ---
 
@@ -285,9 +356,9 @@ These users can log in with no warning. Anyone not on the list gets:
 
 1. Left sidebar → **APIs & Services** → **Credentials**
 2. Click your **OAuth 2.0 Client ID**
-3. Under **Authorized redirect URIs**, add your EC2 URL:
+3. Under **Authorized redirect URIs**, add the production URL:
    ```
-   http://<EC2-PUBLIC-IP>/auth/callback
+   https://mailsherlock.space/auth/callback
    ```
 4. Keep `http://localhost:8000/auth/callback` for local dev
 5. Click **Save**
