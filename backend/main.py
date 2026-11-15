@@ -394,6 +394,15 @@ def _has_attachment(payload: dict) -> bool:
     return False
 
 
+def _gmail_message_timestamp(raw: dict) -> Optional[datetime]:
+    """Gmail's internalDate (ms since epoch) as a UTC datetime; None if missing or invalid."""
+    try:
+        return datetime.fromtimestamp(int(raw["internalDate"]) / 1000, tz=timezone.utc)
+    except (KeyError, TypeError, ValueError, OverflowError, OSError):
+        logger.warning("Gmail message %s has no usable internalDate", raw.get("id"))
+        return None
+
+
 def _raw_message_to_doc(raw: dict, account_email: str) -> dict:
     payload = raw.get("payload", {})
     headers = {h["name"]: h["value"] for h in payload.get("headers", [])}
@@ -405,6 +414,7 @@ def _raw_message_to_doc(raw: dict, account_email: str) -> dict:
         "subject": headers.get("Subject", "(no subject)"),
         "sender": headers.get("From", ""),
         "date": headers.get("Date", ""),
+        "message_timestamp": _gmail_message_timestamp(raw),
         "snippet": raw.get("snippet", ""),
         "body": body[:2000],
         "isUnread": "UNREAD" in label_ids,
@@ -998,7 +1008,7 @@ def _strip_email_for_api(doc: dict, score: float = 0.0) -> dict:
     row = {
         k: v
         for k, v in doc.items()
-        if k not in ("embedding", "emb_subject", "emb_body", "owner_session", "_id")
+        if k not in ("embedding", "emb_subject", "emb_body", "owner_session", "_id", "message_timestamp")
     }
     row["score"] = score
     return row
@@ -1289,7 +1299,8 @@ async def ask(req: QueryRequest, request: Request, response: Response):
     return await _semantic_search(req.query, session_id, top_k=req.top_k)
 
 
-_STRIP_FIELDS = {"embedding", "emb_subject", "emb_body", "owner_session", "_id"}
+# message_timestamp is internal; chat SSE uses plain json.dumps, which cannot encode datetimes.
+_STRIP_FIELDS = {"embedding", "emb_subject", "emb_body", "owner_session", "_id", "message_timestamp"}
 
 
 def _results_for_client(docs: list[dict]) -> list[dict]:

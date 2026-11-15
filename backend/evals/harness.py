@@ -31,6 +31,8 @@ from email.utils import format_datetime
 from pathlib import Path
 from unittest import mock
 
+import httplib2
+from googleapiclient.errors import HttpError
 from mongomock.collection import BulkOperationBuilder
 from mongomock_motor import AsyncMongoMockClient
 
@@ -129,15 +131,26 @@ def to_gmail_message(fx: dict, now: datetime) -> dict:
 
 
 class _Call:
-    def __init__(self, value):
+    def __init__(self, value=None, error: Exception | None = None):
         self._value = value
+        self._error = error
 
     def execute(self):
+        if self._error:
+            raise self._error
         return self._value
 
 
+def _not_found() -> HttpError:
+    body = b'{"error": {"code": 404, "message": "Requested entity was not found."}}'
+    return HttpError(httplib2.Response({"status": 404}), body)
+
+
 class FakeGmail:
-    """The users().messages().list/get calls the sync path makes. Ignores the `q` filter."""
+    """The users().messages().list/get calls the sync and backfill paths make.
+
+    Supports an empty `q` and `newer_than:<N>d`; anything else raises.
+    """
 
     def __init__(self, messages: list[dict]):
         self._by_id = {m["id"]: m for m in messages}
@@ -152,26 +165,43 @@ class FakeGmail:
         return self
 
     def list(self, userId, maxResults=100, q="", pageToken=None, **_):
+        listed = self._listed
+        if q:
+            match = re.fullmatch(r"newer_than:(\d+)d", q)
+            if not match:
+                raise NotImplementedError(f"FakeGmail does not support q={q!r}")
+            cutoff = datetime.now(UTC) - timedelta(days=int(match.group(1)))
+            listed = [m for m in listed if int(m["internalDate"]) >= cutoff.timestamp() * 1000]
         start = int(pageToken or 0)
-        page = self._listed[start : start + maxResults]
+        page = listed[start : start + maxResults]
         out = {"messages": [{"id": m["id"], "threadId": m["threadId"]} for m in page]}
-        if start + maxResults < len(self._listed):
+        if start + maxResults < len(listed):
             out["nextPageToken"] = str(start + maxResults)
         return _Call(out)
 
     def get(self, userId, id, format="full", **_):
-        return _Call(self._by_id[id])
+        message = self._by_id.get(id)
+        if message is None:
+            return _Call(error=_not_found())
+        if format == "minimal":
+            message = {k: v for k, v in message.items() if k != "payload"}
+        return _Call(message)
 
 
 class FakeCredentials:
     valid = True
+    expired = False
+    refresh_token = None
 
     def __init__(self, account: str):
         self.account = account
 
 
-async def ingest(main, db, emails: list[dict], now: datetime) -> None:
-    """Run the fixtures through the same sync function `/emails/sync` uses."""
+async def ingest(main, db, emails: list[dict], now: datetime) -> dict[str, FakeGmail]:
+    """Run the fixtures through the same sync function `/emails/sync` uses.
+
+    Returns the fake Gmail service per account, for tests that make further calls.
+    """
     by_account: dict[str, list[dict]] = {}
     for fx in emails:
         by_account.setdefault(fx["account"], []).append(to_gmail_message(fx, now))
@@ -193,6 +223,7 @@ async def ingest(main, db, emails: list[dict], now: datetime) -> None:
             await main._sync_account_bulk(
                 db, account, FakeCredentials(account), max_results=200, owner_session=SESSION_ID
             )
+    return fakes
 
 
 # ── Running and scoring questions ─────────────────────────────────────────────

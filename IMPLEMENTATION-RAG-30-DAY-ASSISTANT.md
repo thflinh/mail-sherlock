@@ -32,7 +32,7 @@ Tasks:
 
 - [ ] Implement `eligible_filter(owner, accounts, now, requested_filters)` with a controllable UTC clock.
 - [ ] Save Gmail `internalDate` as a UTC `message_timestamp` at ingest. Current records store only the `Date` header string.
-- [ ] Backfill existing records with `messages.get(format=minimal)`, which returns `internalDate` and `labelIds` without the body, before enforcing the cutoff. Remove records that return not-found; exclude any that cannot be backfilled. Skipping this step would hide all indexed mail until Milestone 3.
+- [ ] Backfill existing records before enforcing the cutoff (`scripts/backfill_message_timestamps.py`). List each account's message IDs from the last 31 days, then call `messages.get(format=minimal)`, which returns `internalDate` without the body, only for stored records in that list. Records outside it are older than the window, deleted, or in Spam/Trash; they keep no timestamp, so the cutoff excludes them. Skipping this step would hide all indexed mail until Milestone 3.
 - [ ] Apply scope on search, reader, prior IDs, citations, and thread reads.
 - [ ] Correct hard filters: no matches must return zero, not the previous candidate list.
 - [ ] Intersect requested dates with the last 30 days; enforce Spam/Trash exclusion and sent/archived inclusion.
@@ -162,7 +162,7 @@ Stream progress through existing SSE. Buffer final factual text until source/sch
 
 ### Retention and conversation reuse
 
-Add TTL expiry to mail/chunks as a cleanup backstop; read-time checks remain authoritative. Run lightweight cleanup of dependent turns/caches without Gmail calls.
+Add TTL expiry to mail/chunks as a cleanup backstop; read-time checks remain authoritative. TTL cannot expire records that still lack `message_timestamp` after the Milestone 1 backfill, so delete those explicitly. Run lightweight cleanup of dependent turns/caches without Gmail calls.
 
 Move conversation ownership to the server. Today the dashboard sends the full history, including assistant text, with each `/chat` request and posts whole conversations to `/chat/history` after each reply; the server stores them as received. Instead, the chat request sends `conv_id` and the new user message, and the server builds prompt history from its stored turns. Keep `/chat/history` for listing, loading, and deleting conversations, but stop accepting client-written turns. Client-supplied assistant text never enters a prompt. Existing saved messages carry `results`; treat those IDs as each legacy turn's dependencies, and treat turns without them as unavailable.
 
