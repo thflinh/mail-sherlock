@@ -26,7 +26,7 @@ import inspect
 import json
 import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
 from pathlib import Path
 from unittest import mock
@@ -85,7 +85,7 @@ def _snippet(fx: dict) -> str:
     """Approximate Gmail's snippet: the first ~200 characters of visible text."""
     text = fx.get("text")
     if text is None:
-        text = re.sub(r"<(style|head)\b.*?</\1>", " ", fx["html"], flags=re.S | re.I)
+        text = re.sub(r"<(style|head)\b.*?</\1>", " ", fx["html"], flags=re.DOTALL | re.IGNORECASE)
         text = re.sub(r"<[^>]+>", " ", text)
     return " ".join(html_lib.unescape(text).split())[:200]
 
@@ -279,7 +279,7 @@ async def run_question(main, db, q: dict, ages: dict, *, live: bool) -> dict:
 
 
 async def run_all(main, *, live: bool, now: datetime | None = None) -> list[dict]:
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     emails = load_emails()
     ages = {e["id"]: e["age_days"] for e in emails}
     main._bm25_cache.clear()  # module-level cache; start each run from the same state

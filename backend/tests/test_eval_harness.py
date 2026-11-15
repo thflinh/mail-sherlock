@@ -1,11 +1,10 @@
 """The harness runs the real sync and chat code paths without Gmail, Gemini, or Atlas."""
 
 import asyncio
-from datetime import datetime, timezone
-
-from mongomock_motor import AsyncMongoMockClient
+from datetime import UTC, datetime
 
 from evals import harness
+from mongomock_motor import AsyncMongoMockClient
 
 main = harness.import_main()
 
@@ -15,7 +14,7 @@ def test_fixtures_ingest_through_the_sync_path():
 
     async def scenario():
         db = AsyncMongoMockClient()["test"]
-        await harness.ingest(main, db, emails, datetime.now(timezone.utc))
+        await harness.ingest(main, db, emails, datetime.now(UTC))
         return await db["emails"].find({"owner_session": harness.SESSION_ID}).to_list(length=None)
 
     stored = asyncio.run(scenario())

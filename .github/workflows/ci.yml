@@ -16,8 +16,9 @@ jobs:
         with:
           python-version: "3.11"
 
+      # Pinned: newer ruff releases enable more rules by default, which fails existing code.
       - name: Install ruff
-        run: pip install ruff
+        run: pip install ruff==0.15.11
 
       - name: Lint backend
         run: ruff check backend/

@@ -3,7 +3,6 @@ import zlib
 
 import numpy as np
 import pytest
-
 from evals import harness
 
 main = harness.import_main(live=False)  # blanks the database URI and Gemini key before import

@@ -17,7 +17,7 @@ import argparse
 import asyncio
 import json
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from evals import harness
@@ -74,7 +74,7 @@ def main() -> None:
 
     if args.out:
         report = {
-            "run_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "run_at": datetime.now(UTC).isoformat(timespec="seconds"),
             "mode": "live" if args.live else "offline",
             "git_commit": _git_commit(),
             "top_k": harness.TOP_K,
