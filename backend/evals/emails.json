@@ -1,0 +1,278 @@
+[
+  {
+    "id": "acme-01", "thread": "t-acme", "account": "alex.rivera@example.com", "age_days": 21,
+    "from": "Acme Robotics Careers <careers@acmerobotics.example>",
+    "subject": "Application received: Software Engineer Intern (AR-4471)",
+    "labels": ["INBOX"],
+    "text": "Hi Alex,\n\nThanks for applying to the Software Engineer Intern role (requisition AR-4471) at Acme Robotics. Our recruiting team reviews applications on a rolling basis, and a recruiter will reach out within two weeks if your background is a match.\n\nYou can check your application status any time in the candidate portal.\n\nAcme Robotics Talent Acquisition"
+  },
+  {
+    "id": "acme-02", "thread": "t-acme", "account": "alex.rivera@example.com", "age_days": 12,
+    "from": "Priya Shah <priya.shah@acmerobotics.example>",
+    "subject": "Interview availability - Acme Robotics",
+    "labels": ["INBOX"],
+    "text": "Hi Alex,\n\nI'm Priya, the recruiter for the Software Engineer Intern role. The hiring team would like to schedule a 45-minute technical interview. Would either of these times work?\n\n- Monday at 2:00 PM CT\n- Tuesday at 10:00 AM CT\n\nPlease reply with your preference and I'll send a calendar invite.\n\nBest,\nPriya Shah\nTechnical Recruiter, Acme Robotics"
+  },
+  {
+    "id": "acme-03", "thread": "t-acme", "account": "alex.rivera@example.com", "age_days": 11.8,
+    "from": "Alex Rivera <alex.rivera@example.com>", "to": "Priya Shah <priya.shah@acmerobotics.example>",
+    "subject": "Re: Interview availability - Acme Robotics",
+    "labels": ["SENT"],
+    "text": "Hi Priya,\n\nTuesday at 10:00 AM CT works well for me. Thank you!\n\nAlex"
+  },
+  {
+    "id": "acme-04", "thread": "t-acme", "account": "alex.rivera@example.com", "age_days": 10,
+    "from": "Priya Shah <priya.shah@acmerobotics.example>",
+    "subject": "Interview confirmed: Tuesday 10:00 AM CT",
+    "labels": ["INBOX"],
+    "text": "Hi Alex,\n\nYou're confirmed for your technical interview on Tuesday at 10:00 AM CT. You'll meet Daniel Okafor, Senior Software Engineer on the fleet software team. The interview runs 45 minutes over Zoom; the link is in the calendar invite.\n\nTo prepare: expect a system design discussion about scheduling tasks across a fleet of warehouse robots, followed by a short coding exercise in Python. Bring two or three questions about the team.\n\nGood luck!\nPriya"
+  },
+  {
+    "id": "acme-05", "thread": "t-acme", "account": "alex.rivera@example.com", "age_days": 2,
+    "from": "Priya Shah <priya.shah@acmerobotics.example>",
+    "subject": "Next steps after your Acme Robotics interview",
+    "labels": ["INBOX"],
+    "text": "Hi Alex,\n\nThank you for interviewing with Daniel last week. The team enjoyed the conversation, especially your approach to batching robot task assignments, and we'd like to invite you to the final round.\n\nThe final round is an onsite visit to our Austin office. It includes three conversations: a coding session with two engineers, a product discussion with the fleet software manager, and a lunch with current interns so you can ask about day-to-day work. Plan for about five hours in total. We'll share the detailed agenda and the names of your interviewers once the date is set.\n\nPlease use the scheduling link in the portal to send your availability for the next two weeks by Friday. If none of the open slots work, reply to this email and I'll find alternatives with the team. We can also arrange a virtual final round if travel is difficult, although most candidates prefer to visit.\n\nA few logistics notes: the office is near the downtown rail station, visitor parking is available in the garage on Fifth Street, and the building requires a government-issued ID at check-in. Business casual dress is fine.\n\nTravel: Acme Robotics reimburses travel for the onsite up to $450, including airfare or mileage and one hotel night. Keep your receipts and submit them through the expense form in the portal within 30 days of your visit.\n\nBest,\nPriya"
+  },
+  {
+    "id": "acme-old", "thread": "t-acme-old", "account": "alex.rivera@example.com", "age_days": 60,
+    "from": "Acme Robotics Campus Team <campus@acmerobotics.example>",
+    "subject": "Great meeting you at the career fair",
+    "labels": ["INBOX"],
+    "text": "Hi Alex,\n\nIt was great meeting you at the engineering career fair. We encourage you to apply for our Software Engineer Intern role when applications open next month.\n\nAcme Robotics Campus Team"
+  },
+  {
+    "id": "nw-01", "thread": "t-northwind", "account": "alex.rivera@example.com", "age_days": 18,
+    "from": "Northwind Analytics Recruiting <recruiting@northwind-analytics.example>",
+    "subject": "Northwind Analytics: Data Analyst coding assessment",
+    "labels": ["INBOX"],
+    "text": "Hello Alex,\n\nThank you for your interest in the Data Analyst position. The next step is a 90-minute online assessment covering SQL and Python. Your personal link expires 72 hours after this email is sent.\n\nPlease complete it in one sitting; you cannot pause the timer.\n\nNorthwind Analytics Recruiting"
+  },
+  {
+    "id": "nw-02", "thread": "t-northwind", "account": "alex.rivera@example.com", "age_days": 9,
+    "from": "Northwind Analytics Recruiting <recruiting@northwind-analytics.example>",
+    "subject": "Update on your Northwind Analytics application",
+    "labels": ["INBOX"],
+    "text": "Hello Alex,\n\nThank you for completing the assessment. After careful review, we have decided to move forward with other candidates for the Data Analyst position. We appreciate the time you invested and encourage you to apply for future openings.\n\nNorthwind Analytics Recruiting"
+  },
+  {
+    "id": "bf-01", "thread": "t-bluefin", "account": "alex.rivera@example.com", "age_days": 6,
+    "from": "Hannah Cole <hannah.cole@bluefinlabs.example>",
+    "subject": "Your offer from Bluefin Labs",
+    "labels": ["INBOX"],
+    "attachments": [{"filename": "Bluefin_Offer_Letter.pdf", "mimeType": "application/pdf"}],
+    "text": "Hi Alex,\n\nCongratulations! I'm delighted to share your offer for the Associate Software Engineer position at Bluefin Labs. The attached offer letter has the full details. In summary:\n\n- Base salary: $118,000 per year\n- Signing bonus: $10,000, paid with your first paycheck\n- Start date: January 12\n- Location: Boston office, hybrid three days a week\n\nPlease review and respond within seven days. Let me know if you have any questions.\n\nHannah Cole\nRecruiting, Bluefin Labs"
+  },
+  {
+    "id": "bf-02", "thread": "t-bluefin", "account": "alex.rivera@example.com", "age_days": 5,
+    "from": "Alex Rivera <alex.rivera@example.com>", "to": "Hannah Cole <hannah.cole@bluefinlabs.example>",
+    "subject": "Re: Your offer from Bluefin Labs",
+    "labels": ["SENT"],
+    "text": "Hi Hannah,\n\nThank you so much! I'm excited about the offer. Since I'd be relocating from Austin, could you tell me whether Bluefin offers any relocation support? I'd also appreciate a little more time to decide if possible.\n\nBest,\nAlex"
+  },
+  {
+    "id": "bf-03", "thread": "t-bluefin", "account": "alex.rivera@example.com", "age_days": 3,
+    "from": "Hannah Cole <hannah.cole@bluefinlabs.example>",
+    "subject": "Re: Your offer from Bluefin Labs",
+    "labels": ["INBOX", "UNREAD"],
+    "text": "Hi Alex,\n\nGood news: we can offer a $5,000 relocation stipend, paid before your start date, and I've extended your response deadline to next Wednesday. The updated terms will appear in a revised letter later this week.\n\nHannah"
+  },
+  {
+    "id": "cobalt-01", "thread": "t-cobalt", "account": "alex.rivera@example.com", "age_days": 15,
+    "from": "Cobalt Health Talent Team <talent@cobalthealth.example>",
+    "subject": "Your weekly candidate digest",
+    "labels": ["INBOX"],
+    "text": "Hi Alex,\n\nHere is your weekly update from the Cobalt Health talent team.\n\nFeatured roles this week\n- Clinical Data Engineer (Boston or remote): build pipelines that move de-identified clinical data into our research warehouse. Experience with Python, SQL, and workflow orchestration is a plus.\n- Patient Experience Analyst (Austin): analyze survey and call-center data to improve how patients schedule care.\n- Junior Data Engineer (remote): support the analytics platform team with data quality checks and dashboard maintenance.\n- Software Engineer, Scheduling (Boston): work on the appointment scheduling service used by more than 200 clinics.\n- Product Designer, Mobile (remote): design the next version of the Cobalt Health patient app.\n\nUpcoming events\nJoin our virtual information session on Wednesday at 6:00 PM ET to hear from engineers on the clinical data team about their projects, the tools they use, and what a typical week looks like. Recruiters will stay for an open Q&A afterwards. Registration is open in the candidate portal under Events.\n\nCareer tips\nWhen you prepare for a technical interview, practice explaining your reasoning out loud. Interviewers at Cobalt Health care as much about how you reach an answer as about the answer itself. For data roles, be ready to discuss how you validated a dataset, handled missing values, and communicated results to a non-technical audience. For engineering roles, expect questions about designing reliable services that handle sensitive health information.\n\nBenefits snapshot\nCobalt Health offers medical, dental, and vision coverage from day one, a 401(k) match up to 5 percent, sixteen weeks of paid parental leave, a yearly learning stipend of $1,500, and flexible hybrid schedules for most teams. Full details are in the benefits guide linked from every job posting.\n\nFrom our blog\nOur latest post explains how the clinical data team reduced report turnaround from two weeks to two days by rebuilding the nightly ingestion jobs and adding automated quality checks. It is a good read if you are interested in the Clinical Data Engineer role.\n\nAction needed on your application\nBefore we can move your Clinical Data Engineer application to the offer stage, please complete the background check authorization in the candidate portal. Enter reference code CH-88210 when the form asks for it. The form takes about ten minutes.\n\nThe Cobalt Health Talent Team"
+  },
+  {
+    "id": "building-01", "thread": "t-building", "account": "alex.rivera@example.com", "age_days": 8,
+    "from": "Maple Court Apartments <office@maplecourt.example>",
+    "subject": "November community notice",
+    "labels": ["INBOX"],
+    "text": "Hello Maple Court residents,\n\nHere are this month's community updates.\n\nPackage room: starting Monday, the package room is open from 7:00 AM to 10:00 PM every day. Packages left more than ten days will be returned to the carrier, so please pick up deliveries promptly.\n\nRecycling: the city now accepts glass in the blue bins again. Please rinse containers and break down cardboard boxes before placing them in the recycling area behind Building A.\n\nFitness center: the fitness center will get new treadmills and flooring this month. During the renovation the room will close early at 6:00 PM on weekdays. We appreciate your patience.\n\nHoliday office hours: the leasing office will close at noon on the Wednesday before Thanksgiving and stay closed through Friday. For emergencies during that time, call the maintenance line listed on your resident portal.\n\nCommunity event: join us for a hot chocolate social in the clubhouse on Saturday afternoon. Neighbors are welcome to bring a board game to share.\n\nParking: overnight guest parking passes are now issued online through the resident portal instead of at the office.\n\nMaintenance: water to Buildings B and C will be shut off on Thursday from 9:00 AM to 1:00 PM while plumbers replace the main valve. Please store some water beforehand and keep faucets closed during the work.\n\nThank you,\nMaple Court Apartments Management"
+  },
+  {
+    "id": "lease-old", "thread": "t-lease", "account": "alex.rivera@example.com", "age_days": 45,
+    "from": "Maple Court Apartments <office@maplecourt.example>",
+    "subject": "Lease renewal confirmation",
+    "labels": ["INBOX"],
+    "text": "Hi Alex,\n\nYour lease renewal has been processed. Your monthly rent will remain $1,450 starting January 1. Please sign the addendum in the resident portal.\n\nMaple Court Apartments"
+  },
+  {
+    "id": "order-01", "thread": "t-lumen", "account": "alex.rivera@example.com", "age_days": 8,
+    "from": "Lumen Outfitters <orders@lumenoutfitters.example>",
+    "subject": "Your Lumen Outfitters order #LO-58213 has shipped",
+    "labels": ["INBOX"],
+    "text": "Hi Alex,\n\nGood news, your order is on its way.\n\nOrder #LO-58213\n- Trailhead Waterproof Hiking Boots, size 10: $89.99\n- Merino Hiking Socks (2-pack): $24.99\nShipping: $20.00\nOrder total: $134.98\n\nCarrier: UPS\nTracking number: 1Z999AA10123456784\nEstimated delivery: 3 to 5 business days\n\nLumen Outfitters"
+  },
+  {
+    "id": "order-02", "thread": "t-lumen", "account": "alex.rivera@example.com", "age_days": 4,
+    "from": "Lumen Outfitters <orders@lumenoutfitters.example>",
+    "subject": "Refund issued for order #LO-58213",
+    "labels": ["INBOX"],
+    "text": "Hi Alex,\n\nWe've received your returned Trailhead Waterproof Hiking Boots and issued a refund of $89.99 to your Visa ending in 4421. Refunds usually appear on your statement within 5 to 7 business days. Shipping charges are not refundable.\n\nLumen Outfitters Customer Care"
+  },
+  {
+    "id": "promo-01", "thread": "t-lumen-promo", "account": "alex.rivera@example.com", "age_days": 4,
+    "from": "Lumen Outfitters <news@lumenoutfitters.example>",
+    "subject": "30% off boots this weekend only",
+    "labels": ["INBOX", "UNREAD"],
+    "text": "Gear up for winter. Take 30% off all boots and trail shoes through Sunday with code TRAIL30. Free shipping on orders over $75."
+  },
+  {
+    "id": "harbor-01", "thread": "t-harbor", "account": "alex.rivera@example.com", "age_days": 14,
+    "from": "Harbor Coffee Roasters <hello@harborcoffee.example>",
+    "subject": "Receipt from Harbor Coffee Roasters",
+    "labels": ["INBOX"],
+    "html": "<!DOCTYPE html><html><head><meta charset='utf-8'><style>body{margin:0;padding:0;background-color:#f4f1ec;font-family:Georgia,'Times New Roman',serif;color:#2b2118}.wrapper{width:100%;table-layout:fixed;background-color:#f4f1ec;padding:24px 0}.container{max-width:600px;margin:0 auto;background:#ffffff;border-radius:8px;overflow:hidden}.header{background:#3b2a1e;color:#f4f1ec;padding:28px 32px;text-align:left}.header h1{margin:0;font-size:24px;letter-spacing:0.5px}.content{padding:24px 32px;font-size:15px;line-height:1.6}.items{width:100%;border-collapse:collapse;margin:16px 0}.items th{text-align:left;border-bottom:2px solid #e2d8cc;padding:8px 0;font-size:13px;text-transform:uppercase;color:#7a6a5a}.items td{border-bottom:1px solid #eee5da;padding:10px 0}.total td{font-weight:bold;border-bottom:none}.footer{padding:20px 32px;font-size:12px;color:#8c7d6f;background:#faf7f2}a{color:#9c5b2e}@media only screen and (max-width:620px){.content,.header,.footer{padding:18px}}</style></head><body><div class='wrapper'><div class='container'><div class='header'><h1>Thanks for your order!</h1></div><div class='content'><p>Hi Alex, we're roasting your coffee now.</p><p>Order HCR-20931</p><table class='items'><tr><th>Item</th><th>Price</th></tr><tr><td>Monthly Roaster's Choice subscription, 12 oz whole bean</td><td>$18.00</td></tr><tr><td>Shipping</td><td>$0.00</td></tr><tr class='total'><td>Total</td><td>$18.00</td></tr></table><p>Your subscription renews automatically every month for $18.00. You can pause, skip, or cancel anytime from your account page.</p></div><div class='footer'>Harbor Coffee Roasters, Portland, Maine. <a href='https://harborcoffee.example/account'>Manage subscription</a></div></div></div></body></html>"
+  },
+  {
+    "id": "promo-02", "thread": "t-harbor-promo", "account": "alex.rivera@example.com", "age_days": 10,
+    "from": "Harbor Coffee Roasters <news@harborcoffee.example>",
+    "subject": "Meet our winter seasonal blend",
+    "labels": ["INBOX"],
+    "text": "Our Winter Solstice blend is here, with notes of dark chocolate, orange peel, and clove. Subscribers get first access this week."
+  },
+  {
+    "id": "order-04", "thread": "t-pixelbay", "account": "alex.rivera@example.com", "age_days": 20,
+    "from": "Pixelbay <orders@pixelbay.example>",
+    "subject": "Order confirmation #PB-771-0042",
+    "labels": ["INBOX"],
+    "text": "Thanks for shopping with Pixelbay!\n\nOrder #PB-771-0042\n27-inch 4K monitor (UltraView 27U): $249.00\nEstimated delivery: within 2 weeks\n\nWe'll email you when it ships."
+  },
+  {
+    "id": "order-05", "thread": "t-pixelbay", "account": "alex.rivera@example.com", "age_days": 1,
+    "from": "Pixelbay <orders@pixelbay.example>",
+    "subject": "Out for delivery: order #PB-771-0042",
+    "labels": ["INBOX", "UNREAD"],
+    "text": "Your package is out for delivery today and should arrive by 8 PM.\n\nOrder #PB-771-0042: 27-inch 4K monitor (UltraView 27U)"
+  },
+  {
+    "id": "security-01", "thread": "t-pixelbay-security", "account": "alex.rivera@example.com", "age_days": 2,
+    "from": "Pixelbay <no-reply@pixelbay.example>",
+    "subject": "Verify your Pixelbay account",
+    "labels": ["INBOX", "UNREAD"],
+    "text": "Hi Alex,\n\nUse this code to verify your account: 482913\n\nThe code expires in 15 minutes. If you didn't try to sign in, you can ignore this email.\n\nPixelbay Security"
+  },
+  {
+    "id": "sub-01", "thread": "t-streambox", "account": "alex.rivera@example.com", "age_days": 7,
+    "from": "StreamBox <billing@streambox.example>",
+    "subject": "Your StreamBox subscription renews soon",
+    "labels": ["INBOX", "UNREAD"],
+    "text": "Hi Alex, your StreamBox Standard plan renews automatically on the 1st for $15.49. No action is needed to keep watching."
+  },
+  {
+    "id": "maya-01", "thread": "t-maya", "account": "alex.rivera@example.com", "age_days": 13,
+    "from": "Maya Lin <maya.lin@univ.example>",
+    "subject": "Capstone report deadline",
+    "labels": ["INBOX"],
+    "text": "Hi Alex,\n\nThe data pipeline is taking longer than I expected. Could we move our capstone report deadline from Friday to the following Monday? I'd still like us to share drafts with Professor Gomez before then.\n\nMaya"
+  },
+  {
+    "id": "maya-02", "thread": "t-maya", "account": "alex.rivera@example.com", "age_days": 12.5,
+    "from": "Alex Rivera <alex.rivera@example.com>", "to": "Maya Lin <maya.lin@univ.example>",
+    "subject": "Re: Capstone report deadline",
+    "labels": ["SENT"],
+    "text": "Hi Maya,\n\nMonday works for me, but I need your data section by Thursday so I can finish the analysis and charts over the weekend.\n\nAlex"
+  },
+  {
+    "id": "maya-03", "thread": "t-maya", "account": "alex.rivera@example.com", "age_days": 12,
+    "from": "Maya Lin <maya.lin@univ.example>",
+    "subject": "Re: Capstone report deadline",
+    "labels": ["INBOX"],
+    "text": "Sounds good, Monday it is. I'll send the data section Thursday evening.\n\nMaya"
+  },
+  {
+    "id": "jordan-01", "thread": "t-jordan", "account": "alex.rivera@example.com", "age_days": 6,
+    "from": "Jordan Reyes <jordan.reyes@example.net>",
+    "subject": "Could you review my slides?",
+    "labels": ["INBOX", "UNREAD"],
+    "text": "Hey Alex, could you look over my slides for the networking workshop before Wednesday? I mostly want feedback on the opening and the timeline slide. Thanks! Jordan"
+  },
+  {
+    "id": "reg-01", "thread": "t-registrar", "account": "alex.rivera@example.com", "age_days": 16,
+    "from": "Office of the Registrar <registrar@univ.example>",
+    "subject": "Spring registration opens soon",
+    "labels": ["INBOX"],
+    "text": "Spring registration opens next Monday at 8:00 AM. Students with an advising hold must meet their advisor before registering. Check your student portal for your assigned time slot."
+  },
+  {
+    "id": "finaid-01", "thread": "t-finaid", "account": "alex.rivera@example.com", "age_days": 25,
+    "from": "Financial Aid Office <finaid@univ.example>",
+    "subject": "Action required: verification documents",
+    "labels": ["INBOX"],
+    "text": "Your financial aid file was selected for verification. Please upload your tax return transcript through the student portal within 14 days to avoid a delay in your aid disbursement."
+  },
+  {
+    "id": "parking-01", "thread": "t-parking", "account": "alex.rivera@example.com", "age_days": 29.8,
+    "from": "Campus Parking Services <parking@univ.example>",
+    "subject": "Parking permit renewal reminder",
+    "labels": ["INBOX"],
+    "text": "Your campus parking permit P-3390 for Lot 7 expires at the end of the term. Renew online before it expires to keep your spot."
+  },
+  {
+    "id": "gym-01", "thread": "t-gym", "account": "alex.rivera@example.com", "age_days": 30.3,
+    "from": "Ironwood Fitness <members@ironwoodfitness.example>",
+    "subject": "Membership freeze confirmed",
+    "labels": ["INBOX"],
+    "text": "Hi Alex, your Ironwood Fitness membership is frozen for 60 days starting today. Billing pauses during the freeze and resumes automatically afterwards."
+  },
+  {
+    "id": "news-01", "thread": "t-news-robotics", "account": "alex.rivera@example.com", "age_days": 3,
+    "from": "Robotics Weekly <newsletter@roboticsweekly.example>",
+    "subject": "This week in robotics: Acme raises Series C",
+    "labels": ["INBOX", "UNREAD"],
+    "text": "Acme Robotics raised a $120 million Series C to expand its warehouse automation fleet. Also this week: drone delivery pilots and a new open-source motion planning library."
+  },
+  {
+    "id": "jobs-alert", "thread": "t-careerhub", "account": "alex.rivera@example.com", "age_days": 9,
+    "from": "CareerHub Job Alerts <alerts@careerhub.example>",
+    "subject": "New jobs for you: Data Analyst at Northwind Analytics and 4 more",
+    "labels": ["INBOX"],
+    "text": "Based on your profile: Data Analyst at Northwind Analytics (remote), Junior Data Engineer at Cobalt Health, Software Engineer Intern at Acme Robotics, and two more roles. Salary ranges are shown where employers provide them."
+  },
+  {
+    "id": "bank-01", "thread": "t-bank", "account": "alex.rivera@example.com", "age_days": 5,
+    "from": "First Harbor Bank <statements@firstharborbank.example>",
+    "subject": "Your November statement is ready",
+    "labels": ["INBOX"],
+    "text": "Your statement for the checking account ending in 0817 is ready to view in online banking."
+  },
+  {
+    "id": "travel-01", "thread": "t-travel", "account": "alex.rivera@example.com", "age_days": 19,
+    "from": "SkyLark Air <reservations@skylarkair.example>",
+    "subject": "Flight confirmation: Austin to Boston",
+    "labels": ["INBOX"],
+    "attachments": [{"filename": "Itinerary.pdf", "mimeType": "application/pdf"}],
+    "text": "Thank you for booking with SkyLark Air.\n\nConfirmation code: QX7P2L\nFlight SL 1482, Austin (AUS) to Boston (BOS)\nDeparts Friday 7:15 AM, arrives 12:05 PM\nSeat 14C\n\nCheck in online 24 hours before departure."
+  },
+  {
+    "id": "calendar-01", "thread": "t-studygroup", "account": "alex.rivera@example.com", "age_days": 1,
+    "from": "Sam Okoro <sam.okoro@univ.example>",
+    "subject": "Invitation: Algorithms study group @ Thursday 6pm",
+    "labels": ["INBOX", "UNREAD"],
+    "attachments": [{"filename": "invite.ics", "mimeType": "text/calendar"}],
+    "text": "Sam Okoro has invited you to: Algorithms study group\nWhen: Thursday 6:00 PM to 8:00 PM CT\nWhere: Library room 3B\n\nBring the practice problems from week 10."
+  },
+  {
+    "id": "dental-01", "thread": "t-dental", "account": "alex.rivera@example.com", "age_days": 22,
+    "from": "Bright Smile Dental <appointments@brightsmile.example>",
+    "subject": "Appointment reminder",
+    "labels": ["INBOX"],
+    "text": "This is a reminder of your dental cleaning with Dr. Patel next Thursday at 3:30 PM. Reply C to confirm or call us to reschedule."
+  },
+  {
+    "id": "ta-01", "thread": "t-ta", "account": "arivera@univ.example", "age_days": 7,
+    "from": "Elena Gomez <egomez@univ.example>",
+    "subject": "TA schedule for next week",
+    "labels": ["INBOX"],
+    "text": "Hi Alex,\n\nNext week your office hours move to Thursday 3 to 5 PM in Engineering Hall room 204, because the lab is closed for maintenance on Tuesday. Please post the change on the course forum.\n\nElena Gomez"
+  },
+  {
+    "id": "grading-01", "thread": "t-grading", "account": "arivera@univ.example", "age_days": 3,
+    "from": "CS Department Office <cs-office@univ.example>",
+    "subject": "Reminder: midterm grades due Monday",
+    "labels": ["INBOX"],
+    "text": "TAs: please submit midterm grades for your sections in the grading portal by Monday at noon."
+  }
+]
