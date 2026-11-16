@@ -30,6 +30,7 @@ from pymongo.errors import PyMongoError
 from rank_bm25 import BM25Okapi
 
 from db import connect_db, close_db, get_db
+from email_scope import eligible_filter
 from embeddings import (
     add_embeddings_inplace,
     cosine_similarity,
@@ -394,6 +395,15 @@ def _has_attachment(payload: dict) -> bool:
     return False
 
 
+def _gmail_message_timestamp(raw: dict) -> Optional[datetime]:
+    """Gmail's internalDate (ms since epoch) as a UTC datetime; None if missing or invalid."""
+    try:
+        return datetime.fromtimestamp(int(raw["internalDate"]) / 1000, tz=timezone.utc)
+    except (KeyError, TypeError, ValueError, OverflowError, OSError):
+        logger.warning("Gmail message %s has no usable internalDate", raw.get("id"))
+        return None
+
+
 def _raw_message_to_doc(raw: dict, account_email: str) -> dict:
     payload = raw.get("payload", {})
     headers = {h["name"]: h["value"] for h in payload.get("headers", [])}
@@ -405,6 +415,7 @@ def _raw_message_to_doc(raw: dict, account_email: str) -> dict:
         "subject": headers.get("Subject", "(no subject)"),
         "sender": headers.get("From", ""),
         "date": headers.get("Date", ""),
+        "message_timestamp": _gmail_message_timestamp(raw),
         "snippet": raw.get("snippet", ""),
         "body": body[:2000],
         "isUnread": "UNREAD" in label_ids,
@@ -570,10 +581,6 @@ app.add_middleware(
 _STATIC_DIR = Path(__file__).parent / "static"
 if (_STATIC_DIR / "assets").exists():
     app.mount("/assets", StaticFiles(directory=str(_STATIC_DIR / "assets")), name="assets")
-
-
-# BM25 cache: session_id → (BM25Okapi, email_count) — invalidated when email count changes
-_bm25_cache: dict = {}
 
 
 class EmailSignupRequest(BaseModel):
@@ -926,6 +933,8 @@ def _conversation_search_key(top_k: int, filters: dict | None) -> str:
 
 
 _VALID_CONTEXT_REFS = frozenset({"first", "second", "third", "last", "active"})
+# Refs that name a position in the last result list, as opposed to "the open one" or no ref.
+_ORDINAL_REFS = frozenset({"first", "second", "third", "last"})
 
 
 def _normalize_context_ref(raw) -> Optional[str]:
@@ -950,10 +959,11 @@ def _resolve_context_ref_to_email_id(ctx: ConversationContext, ref: Optional[str
         return ids[0]
     if ref == "first":
         return ids[0]
+    # An ordinal past the end of the list has no answer; the caller asks which email is meant.
     if ref == "second":
-        return ids[1] if len(ids) > 1 else ids[0]
+        return ids[1] if len(ids) > 1 else None
     if ref == "third":
-        return ids[2] if len(ids) > 2 else ids[-1]
+        return ids[2] if len(ids) > 2 else None
     if ref == "last":
         return ids[-1]
     if ref == "active":
@@ -998,28 +1008,33 @@ def _strip_email_for_api(doc: dict, score: float = 0.0) -> dict:
     row = {
         k: v
         for k, v in doc.items()
-        if k not in ("embedding", "emb_subject", "emb_body", "owner_session", "_id")
+        if k not in ("embedding", "emb_subject", "emb_body", "owner_session", "_id", "message_timestamp")
     }
     row["score"] = score
     return row
 
 
-async def _fetch_email_doc(db, session_id: str, email_id: str) -> Optional[dict]:
+async def _fetch_email_doc(db, session_id: str, email_id: str, accounts: list[str]) -> Optional[dict]:
+    """One email this session may read now (see eligible_filter), or None.
+
+    Every lookup by ID goes through here: IDs the browser sends back, the open email, and the
+    reader. `owner_session` stays on the document for internal use; API output strips it.
+    """
     doc = await db["emails"].find_one(
-        {"id": email_id, "owner_session": session_id},
-        {"_id": 0, "embedding": 0, "emb_subject": 0, "emb_body": 0, "owner_session": 0},
+        {"id": email_id, **eligible_filter(session_id, accounts)},
+        {"_id": 0, "embedding": 0, "emb_subject": 0, "emb_body": 0},
     )
     return doc
 
 
 async def _fetch_emails_by_ids_ordered(
-    db, session_id: str, ids: list[str], *, score: float = 0.0
+    db, session_id: str, ids: list[str], accounts: list[str], *, score: float = 0.0
 ) -> list[dict]:
     out: list[dict] = []
     for eid in ids:
         if not eid:
             continue
-        doc = await _fetch_email_doc(db, session_id, str(eid))
+        doc = await _fetch_email_doc(db, session_id, str(eid), accounts)
         if doc:
             out.append(_strip_email_for_api(doc, score=score))
     return out
@@ -1096,6 +1111,13 @@ def _latest_user_message(messages: list[ChatMessage]) -> str:
     return ""
 
 
+# Gemini date hints narrow the 30-day window; eligible_filter clamps longer ranges to it.
+_DATE_HINTS = {"last_week": timedelta(days=7), "last_month": timedelta(days=30), "last_year": timedelta(days=365)}
+# Added to a normalized relevance score (top result = 1.0): sender matches rank first unless
+# a non-match is much more relevant. A tuning value, not a measured one.
+_SENDER_BOOST = 0.5
+
+
 async def _semantic_search(
     query_text: str,
     session_id: str,
@@ -1105,24 +1127,10 @@ async def _semantic_search(
     intent: dict | None = None,
 ) -> dict:
     db = get_db()
-    try:
-        emails = await db["emails"].find(
-            {"owner_session": session_id},
-            {"_id": 0, "owner_session": 0},
-        ).to_list(length=1000)
-    except PyMongoError as e:
-        raise HTTPException(
-            status_code=503,
-            detail=f"MongoDB unavailable (check MONGODB_URI, network, TLS): {e}",
-        ) from e
-
     connected_accounts = await _list_connected_emails(db, session_id=session_id)
     gmail_auth_email = connected_accounts[0] if connected_accounts else None
     q = query_text.strip()
     if not q:
-        return {"results": [], "gmailAuthEmail": gmail_auth_email, "accounts": connected_accounts}
-
-    if not emails:
         return {"results": [], "gmailAuthEmail": gmail_auth_email, "accounts": connected_accounts}
 
     try:
@@ -1142,46 +1150,25 @@ async def _semantic_search(
         search_q = intent.get("search_query") or q
         keywords = [kw.lower() for kw in intent.get("keywords") or []]
         sender_hint = (intent.get("sender") or "").lower()
-        date_hint = intent.get("date_hint")
 
-        candidates = emails
-
-        # Apply client-requested filter chips (has_attachment / unread_only / account)
-        if filters:
-            ae = (filters.get("account_email") or "").strip()
-            if ae:
-                filtered = [e for e in candidates if e.get("accountEmail") == ae]
-                candidates = filtered
-            if filters.get("has_attachment"):
-                filtered = [e for e in candidates if e.get("hasAttachment")]
-                if filtered:
-                    candidates = filtered
-            if filters.get("unread_only"):
-                filtered = [e for e in candidates if e.get("isUnread")]
-                if filtered:
-                    candidates = filtered
-
-        # Filter by sender if Gemini extracted one
-        if sender_hint:
-            filtered = [e for e in candidates if sender_hint in e.get("sender", "").lower()]
-            if filtered:
-                candidates = filtered
-
-        # Filter by date if Gemini extracted a time range
-        if date_hint:
-            from email.utils import parsedate_to_datetime
-            now = datetime.now(timezone.utc)
-            delta = {"last_week": timedelta(days=7), "last_month": timedelta(days=30), "last_year": timedelta(days=365)}.get(date_hint)
-            if delta:
-                cutoff = now - delta
-                def _parse_date(s):
-                    try:
-                        return parsedate_to_datetime(s)
-                    except Exception:
-                        return datetime.min.replace(tzinfo=timezone.utc)
-                filtered = [e for e in candidates if _parse_date(e.get("date", "")) >= cutoff]
-                if filtered:
-                    candidates = filtered
+        # Scope, filter chips, and an explicit date range are hard filters: no match, no results.
+        # A sender Gemini inferred only boosts ranking (below), because the guess can be wrong.
+        chips = filters or {}
+        scope = eligible_filter(
+            session_id,
+            connected_accounts,
+            account_email=(chips.get("account_email") or "").strip() or None,
+            unread_only=bool(chips.get("unread_only")),
+            has_attachment=bool(chips.get("has_attachment")),
+            newer_than=_DATE_HINTS.get(intent.get("date_hint")),
+        )
+        try:
+            candidates = await db["emails"].find(scope, {"_id": 0, "owner_session": 0}).to_list(length=None)
+        except PyMongoError as e:
+            raise HTTPException(
+                status_code=503,
+                detail=f"MongoDB unavailable (check MONGODB_URI, network, TLS): {e}",
+            ) from e
 
         if not candidates:
             return {
@@ -1204,7 +1191,7 @@ async def _semantic_search(
             elif focus == "body":
                 sem_scores = 0.2 * subj_scores + 0.8 * body_scores
             elif focus == "sender":
-                sem_scores = subj_scores  # sender already hard-filtered above
+                sem_scores = subj_scores  # a matching sender is boosted below
             else:
                 sem_scores = 0.5 * subj_scores + 0.5 * body_scores
         else:
@@ -1214,16 +1201,13 @@ async def _semantic_search(
         # ── BM25 hybrid scoring ──────────────────────────────────────────────
         # Semantic search misses exact matches (order numbers, names, IDs).
         # BM25 covers those gaps; blend 70% semantic + 30% keyword.
-        cached = _bm25_cache.get(session_id)
-        if cached and cached[1] == len(candidates):
-            bm25 = cached[0]
-        else:
-            tokenized_corpus = [
-                (e.get("subject", "") + " " + e.get("snippet", "")).lower().split()
-                for e in candidates
-            ]
-            bm25 = BM25Okapi(tokenized_corpus)
-            _bm25_cache[session_id] = (bm25, len(candidates))
+        # Built per request: the candidate set changes with filters and new mail, and a cache
+        # keyed on anything less than the exact set scores the wrong emails.
+        tokenized_corpus = [
+            (e.get("subject", "") + " " + e.get("snippet", "")).lower().split()
+            for e in candidates
+        ]
+        bm25 = BM25Okapi(tokenized_corpus)
         bm25_scores = np.array(bm25.get_scores(search_q.lower().split()), dtype=np.float32)
 
         sem_max  = float(sem_scores.max())  or 1.0
@@ -1239,6 +1223,11 @@ async def _semantic_search(
                 text = (email.get("subject", "") + " " + email.get("body", "")).lower()
                 boost = sum(0.15 for kw in keywords if kw in text)
                 scores[idx] += boost
+
+        if sender_hint:
+            for idx, email in enumerate(candidates):
+                if sender_hint in (email.get("sender") or "").lower():
+                    scores[idx] += _SENDER_BOOST
 
         # Fetch top-15 by cosine score, then re-rank with Gemini for true relevance
         pre_k = min(15, len(candidates))
@@ -1259,6 +1248,8 @@ async def _semantic_search(
             "accounts": connected_accounts,
             "intent": intent,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Search failed: {e}") from e
 
@@ -1289,7 +1280,8 @@ async def ask(req: QueryRequest, request: Request, response: Response):
     return await _semantic_search(req.query, session_id, top_k=req.top_k)
 
 
-_STRIP_FIELDS = {"embedding", "emb_subject", "emb_body", "owner_session", "_id"}
+# message_timestamp is internal; chat SSE uses plain json.dumps, which cannot encode datetimes.
+_STRIP_FIELDS = {"embedding", "emb_subject", "emb_body", "owner_session", "_id", "message_timestamp"}
 
 
 def _results_for_client(docs: list[dict]) -> list[dict]:
@@ -1365,13 +1357,31 @@ async def _chat_stream(req: ChatRequest, session_id: str):
     elif mode in ("answer", "extract"):
         prior_path = bool(uses_prior and prior_ok and req.context is not None)
         if prior_path:
-            tid = (req.active_email_id or "").strip() or None
-            if not tid:
+            if context_ref in _ORDINAL_REFS:
+                # "The second one" names a result explicitly, so it beats the email open in the reader.
                 tid = _resolve_context_ref_to_email_id(req.context, context_ref)
+            else:
+                tid = (req.active_email_id or "").strip() or None
+                if not tid:
+                    tid = _resolve_context_ref_to_email_id(req.context, context_ref)
             if tid:
-                preloaded_email = await _fetch_email_doc(db, session_id, tid)
+                preloaded_email = await _fetch_email_doc(db, session_id, tid, connected_accounts)
+            if context_ref in _ORDINAL_REFS and not preloaded_email:
+                # Never answer from a different email than the one the user pointed at.
+                n = len(req.context.result_ids)
+                clarify_q = (
+                    f"I only showed {n} email{'' if n == 1 else 's'} last time. Which one do you mean?"
+                    if tid is None
+                    else "I can't open that email anymore. Sherlock only covers the last 30 days of your connected accounts."
+                )
+                yield _sse({"type": "meta", "mode": "clarify", "results": [], "intent": intent,
+                            "clarification": clarify_q, "gmailAuthEmail": gmail_auth_email,
+                            "accounts": connected_accounts, "context": req.context.model_dump()})
+                yield _sse({"type": "token", "text": clarify_q})
+                yield _sse({"type": "done"})
+                return
             id_slice = list(req.context.result_ids)[: req.top_k]
-            candidates = await _fetch_emails_by_ids_ordered(db, session_id, id_slice, score=0.0)
+            candidates = await _fetch_emails_by_ids_ordered(db, session_id, id_slice, connected_accounts, score=0.0)
             if not preloaded_email:
                 prior_path = False
         if not prior_path:
@@ -1396,15 +1406,14 @@ async def _chat_stream(req: ChatRequest, session_id: str):
     results_for_meta: list[dict] = candidates
 
     if mode == "answer":
-        email_doc: Optional[dict] = None
-        if (req.active_email_id or "").strip():
-            email_doc = await _fetch_email_doc(db, session_id, req.active_email_id.strip())
-        if not email_doc and preloaded_email:
-            email_doc = preloaded_email
+        # preloaded_email is the referenced result (already preferring an explicit ordinal).
+        email_doc: Optional[dict] = preloaded_email
+        if not email_doc and (req.active_email_id or "").strip():
+            email_doc = await _fetch_email_doc(db, session_id, req.active_email_id.strip(), connected_accounts)
         if not email_doc and candidates:
             top_id = candidates[0].get("id")
             if top_id:
-                email_doc = await _fetch_email_doc(db, session_id, str(top_id))
+                email_doc = await _fetch_email_doc(db, session_id, str(top_id), connected_accounts)
             if not email_doc:
                 email_doc = candidates[0]
         if not email_doc:
@@ -1433,7 +1442,7 @@ async def _chat_stream(req: ChatRequest, session_id: str):
 
     elif mode == "summarize":
         if (req.active_email_id or "").strip():
-            doc = await _fetch_email_doc(db, session_id, req.active_email_id.strip())
+            doc = await _fetch_email_doc(db, session_id, req.active_email_id.strip(), connected_accounts)
             emails_to_summarize = [doc] if doc else candidates[:5]
         else:
             emails_to_summarize = candidates[:5]
@@ -1455,15 +1464,14 @@ async def _chat_stream(req: ChatRequest, session_id: str):
 
     elif mode == "extract":
         extract_field = intent.get("extract_field") or "information"
-        email_doc = None
-        if (req.active_email_id or "").strip():
-            email_doc = await _fetch_email_doc(db, session_id, req.active_email_id.strip())
-        if not email_doc and preloaded_email:
-            email_doc = preloaded_email
+        # preloaded_email is the referenced result (already preferring an explicit ordinal).
+        email_doc = preloaded_email
+        if not email_doc and (req.active_email_id or "").strip():
+            email_doc = await _fetch_email_doc(db, session_id, req.active_email_id.strip(), connected_accounts)
         if not email_doc and candidates:
             top_id = candidates[0].get("id")
             if top_id:
-                email_doc = await _fetch_email_doc(db, session_id, str(top_id))
+                email_doc = await _fetch_email_doc(db, session_id, str(top_id), connected_accounts)
             if not email_doc:
                 email_doc = candidates[0]
         if not email_doc:
@@ -1530,13 +1538,13 @@ async def get_email(email_id: str, request: Request, response: Response):
     """Fetch full email content for the in-app reading panel."""
     session_id = await _resolve_session(request, response)
     db = get_db()
-    meta = await db["emails"].find_one(
-        {"id": email_id, "owner_session": session_id},
-        {"accountEmail": 1, "_id": 0},
-    )
-    body = ""
-    if meta:
-        body = await _fetch_body_from_gmail(db, session_id, email_id, meta.get("accountEmail", ""))
+    accounts = await _list_connected_emails(db, session_id=session_id)
+    # The only caller of get_email_for_reader, so this check scopes the reader too. An expired
+    # email gets the same 404 as a missing one and is never fetched from Gmail.
+    meta = await _fetch_email_doc(db, session_id, email_id, accounts)
+    if not meta:
+        raise HTTPException(status_code=404, detail=f"Email {email_id} not found.")
+    body = await _fetch_body_from_gmail(db, session_id, email_id, meta.get("accountEmail", ""))
     doc = await get_email_for_reader(email_id, db, session_id=session_id, body_override=body)
     if not doc:
         raise HTTPException(status_code=404, detail=f"Email {email_id} not found.")
@@ -1938,8 +1946,15 @@ async def seed_emails(request: Request, response: Response):
     session_id = await _resolve_session(request, response)
     path = Path(__file__).parent / "emails.json"
     emails = json.loads(path.read_text())
+    # The mock dates are from 2024. Move them so the newest is today, keeping their spacing,
+    # so they stay inside the 30-day window.
+    newest = max(datetime.fromisoformat(e["date"]) for e in emails)
+    now = datetime.now(timezone.utc)
     for e in emails:
         e["owner_session"] = session_id
+        sent = now - (newest - datetime.fromisoformat(e["date"]))
+        e["message_timestamp"] = sent
+        e["date"] = sent.strftime("%Y-%m-%d")
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, add_embeddings_inplace, emails)
     await loop.run_in_executor(None, assign_labels_bulk, emails)

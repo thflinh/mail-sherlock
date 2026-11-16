@@ -16,12 +16,30 @@ jobs:
         with:
           python-version: "3.11"
 
+      # Pinned: newer ruff releases enable more rules by default, which fails existing code.
       - name: Install ruff
-        run: pip install ruff
+        run: pip install ruff==0.15.11
 
       - name: Lint backend
         run: ruff check backend/
   
+  test-backend:
+    name: Test - Python (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # Tests replace the embedding model, so skip the large torch/sentence-transformers install.
+      - name: Install dependencies
+        run: |
+          grep -vE '^(torch|sentence-transformers)\b' backend/requirements.txt > /tmp/requirements-ci.txt
+          pip install -r /tmp/requirements-ci.txt -r backend/requirements-dev.txt
+      - name: Run tests
+        working-directory: backend
+        run: pytest
+
   typecheck-frontend:
     name: Type check - TypeScript
     runs-on: ubuntu-latest
@@ -78,7 +96,7 @@ jobs:
     name: Deploy - AWS EC2
     runs-on: ubuntu-latest
     environment: ec2-production
-    needs: [lint-backend, typecheck-frontend, build-frontend, syntax-check-backend]
+    needs: [lint-backend, test-backend, typecheck-frontend, build-frontend, syntax-check-backend]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
       - name: Deploy via SSH
