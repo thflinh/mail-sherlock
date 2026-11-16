@@ -94,6 +94,21 @@ def test_backfill_sets_internal_date_only_for_recent_mail(monkeypatch):
             assert d.get("message_timestamp") is None
 
 
+def test_backfilled_mail_inside_the_window_is_searchable_again(monkeypatch):
+    accounts = sorted({e["account"] for e in EMAILS})
+
+    async def scenario():
+        db, _ = await _legacy_mailbox(monkeypatch)
+        scope = main.eligible_filter(harness.SESSION_ID, accounts)
+        before = await db["emails"].count_documents(scope)
+        await backfill.backfill(db, dry_run=False)
+        return before, await db["emails"].count_documents(scope)
+
+    before, after = asyncio.run(scenario())
+    assert before == 0
+    assert after == sum(e["age_days"] <= 30 for e in EMAILS)
+
+
 def test_second_run_has_nothing_left_to_fetch(monkeypatch):
     async def scenario():
         db, _ = await _legacy_mailbox(monkeypatch)

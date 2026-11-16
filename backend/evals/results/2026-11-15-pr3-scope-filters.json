@@ -1,0 +1,648 @@
+{
+  "run_at": "2026-11-15T23:47:28+00:00",
+  "mode": "offline",
+  "git_commit": "37bf090",
+  "top_k": 5,
+  "summary": {
+    "passed": 21,
+    "total": 30,
+    "relevant_found": {
+      "hits": 15,
+      "total": 24
+    },
+    "by_split": {
+      "dev": {
+        "passed": 15,
+        "total": 19
+      },
+      "heldout": {
+        "passed": 6,
+        "total": 11
+      }
+    },
+    "by_category": {
+      "exact_fact": {
+        "passed": 6,
+        "total": 7
+      },
+      "identifier": {
+        "passed": 3,
+        "total": 3
+      },
+      "deep_body": {
+        "passed": 0,
+        "total": 3
+      },
+      "html_only": {
+        "passed": 0,
+        "total": 1
+      },
+      "filter": {
+        "passed": 4,
+        "total": 5
+      },
+      "conversation": {
+        "passed": 0,
+        "total": 2
+      },
+      "follow_up": {
+        "passed": 4,
+        "total": 4
+      },
+      "no_answer": {
+        "passed": 1,
+        "total": 1
+      },
+      "window": {
+        "passed": 3,
+        "total": 4
+      }
+    },
+    "questions_with_out_of_window_mail": 0,
+    "errors": 0
+  },
+  "questions": [
+    {
+      "id": "q01-acme-interview-time",
+      "split": "dev",
+      "category": "exact_fact",
+      "expect": "found",
+      "mode": "extract",
+      "returned": [
+        "acme-05",
+        "acme-02",
+        "acme-03",
+        "acme-04",
+        "news-01"
+      ],
+      "used": "acme-05",
+      "passed": false,
+      "hit": false,
+      "detail": "missed ['acme-04'], got ['acme-05']",
+      "out_of_window": [],
+      "forbidden_hits": []
+    },
+    {
+      "id": "q02-boots-tracking",
+      "split": "dev",
+      "category": "exact_fact",
+      "expect": "found",
+      "mode": "extract",
+      "returned": [
+        "order-01",
+        "order-02",
+        "promo-01",
+        "parking-01",
+        "jordan-01"
+      ],
+      "used": "order-01",
+      "passed": true,
+      "hit": true,
+      "detail": "",
+      "out_of_window": [],
+      "forbidden_hits": []
+    },
+    {
+      "id": "q03-refund-amount",
+      "split": "dev",
+      "category": "identifier",
+      "expect": "found",
+      "mode": "extract",
+      "returned": [
+        "order-02",
+        "order-01",
+        "order-05",
+        "order-04",
+        "finaid-01"
+      ],
+      "used": "order-02",
+      "passed": true,
+      "hit": true,
+      "detail": "",
+      "out_of_window": [],
+      "forbidden_hits": []
+    },
+    {
+      "id": "q04-pixelbay-code",
+      "split": "dev",
+      "category": "exact_fact",
+      "expect": "found",
+      "mode": "extract",
+      "returned": [
+        "security-01",
+        "finaid-01",
+        "jordan-01",
+        "order-04",
+        "order-05"
+      ],
+      "used": "security-01",
+      "passed": true,
+      "hit": true,
+      "detail": "",
+      "out_of_window": [],
+      "forbidden_hits": []
+    },
+    {
+      "id": "q05-flight-code",
+      "split": "heldout",
+      "category": "exact_fact",
+      "expect": "found",
+      "mode": "extract",
+      "returned": [
+        "travel-01",
+        "security-01",
+        "order-04",
+        "order-05",
+        "order-02"
+      ],
+      "used": "travel-01",
+      "passed": true,
+      "hit": true,
+      "detail": "",
+      "out_of_window": [],
+      "forbidden_hits": []
+    },
+    {
+      "id": "q06-bluefin-salary",
+      "split": "heldout",
+      "category": "exact_fact",
+      "expect": "found",
+      "mode": "extract",
+      "returned": [
+        "bf-01",
+        "bf-02",
+        "bf-03",
+        "jobs-alert",
+        "acme-04"
+      ],
+      "used": "bf-01",
+      "passed": true,
+      "hit": true,
+      "detail": "",
+      "out_of_window": [],
+      "forbidden_hits": []
+    },
+    {
+      "id": "q07-ta-office-hours",
+      "split": "dev",
+      "category": "exact_fact",
+      "expect": "found",
+      "mode": "answer",
+      "returned": [
+        "ta-01",
+        "building-01",
+        "dental-01",
+        "acme-04",
+        "jobs-alert"
+      ],
+      "used": "ta-01",
+      "passed": true,
+      "hit": true,
+      "detail": "",
+      "out_of_window": [],
+      "forbidden_hits": []
+    },
+    {
+      "id": "q08-study-group",
+      "split": "dev",
+      "category": "exact_fact",
+      "expect": "found",
+      "mode": "find",
+      "returned": [
+        "calendar-01",
+        "acme-05",
+        "grading-01",
+        "cobalt-01",
+        "acme-02"
+      ],
+      "used": null,
+      "passed": true,
+      "hit": true,
+      "detail": "",
+      "out_of_window": [],
+      "forbidden_hits": []
+    },
+    {
+      "id": "q09-order-number",
+      "split": "dev",
+      "category": "identifier",
+      "expect": "found",
+      "mode": "find",
+      "returned": [
+        "order-02",
+        "order-01",
+        "order-05",
+        "order-04",
+        "acme-01"
+      ],
+      "used": null,
+      "passed": true,
+      "hit": true,
+      "detail": "",
+      "out_of_window": [],
+      "forbidden_hits": []
+    },
+    {
+      "id": "q10-requisition-id",
+      "split": "dev",
+      "category": "identifier",
+      "expect": "found",
+      "mode": "find",
+      "returned": [
+        "acme-01",
+        "order-05",
+        "order-04",
+        "parking-01",
+        "order-02"
+      ],
+      "used": null,
+      "passed": true,
+      "hit": true,
+      "detail": "",
+      "out_of_window": [],
+      "forbidden_hits": []
+    },
+    {
+      "id": "q11-cobalt-reference",
+      "split": "dev",
+      "category": "deep_body",
+      "expect": "found",
+      "mode": "extract",
+      "returned": [
+        "nw-01",
+        "finaid-01",
+        "jobs-alert",
+        "cobalt-01",
+        "nw-02"
+      ],
+      "used": "nw-01",
+      "passed": false,
+      "hit": false,
+      "detail": "missed ['cobalt-01'], got ['nw-01']",
+      "out_of_window": [],
+      "forbidden_hits": []
+    },
+    {
+      "id": "q12-water-shutoff",
+      "split": "heldout",
+      "category": "deep_body",
+      "expect": "found",
+      "mode": "extract",
+      "returned": [
+        "ta-01",
+        "building-01",
+        "reg-01",
+        "sub-01",
+        "parking-01"
+      ],
+      "used": "ta-01",
+      "passed": false,
+      "hit": false,
+      "detail": "missed ['building-01'], got ['ta-01']",
+      "out_of_window": [],
+      "forbidden_hits": []
+    },
+    {
+      "id": "q13-acme-reimbursement",
+      "split": "dev",
+      "category": "deep_body",
+      "expect": "found",
+      "mode": "extract",
+      "returned": [
+        "news-01",
+        "bf-03",
+        "acme-05",
+        "acme-01",
+        "bf-01"
+      ],
+      "used": "news-01",
+      "passed": false,
+      "hit": false,
+      "detail": "missed ['acme-05'], got ['news-01']",
+      "out_of_window": [],
+      "forbidden_hits": []
+    },
+    {
+      "id": "q14-harbor-subscription",
+      "split": "heldout",
+      "category": "html_only",
+      "expect": "found",
+      "mode": "extract",
+      "returned": [
+        "sub-01",
+        "harbor-01",
+        "bf-01",
+        "bf-02",
+        "bf-03"
+      ],
+      "used": "sub-01",
+      "passed": false,
+      "hit": false,
+      "detail": "missed ['harbor-01'], got ['sub-01']",
+      "out_of_window": [],
+      "forbidden_hits": []
+    },
+    {
+      "id": "q15-unread-jordan",
+      "split": "dev",
+      "category": "filter",
+      "expect": "found",
+      "mode": "find",
+      "returned": [
+        "jordan-01",
+        "sub-01",
+        "security-01",
+        "order-05",
+        "calendar-01"
+      ],
+      "used": null,
+      "passed": true,
+      "hit": true,
+      "detail": "",
+      "out_of_window": [],
+      "forbidden_hits": []
+    },
+    {
+      "id": "q16-univ-attachments",
+      "split": "dev",
+      "category": "filter",
+      "expect": "empty",
+      "mode": "find",
+      "returned": [],
+      "used": null,
+      "passed": true,
+      "hit": null,
+      "detail": "",
+      "out_of_window": [],
+      "forbidden_hits": []
+    },
+    {
+      "id": "q17-pixelbay-last-week",
+      "split": "dev",
+      "category": "filter",
+      "expect": "found",
+      "mode": "find",
+      "returned": [
+        "security-01",
+        "order-05",
+        "order-02",
+        "calendar-01",
+        "acme-05"
+      ],
+      "used": null,
+      "passed": true,
+      "hit": true,
+      "detail": "",
+      "out_of_window": [],
+      "forbidden_hits": []
+    },
+    {
+      "id": "q18-northwind-last-week",
+      "split": "heldout",
+      "category": "filter",
+      "expect": "unanswerable",
+      "mode": "find",
+      "returned": [
+        "bf-02",
+        "jordan-01",
+        "order-05",
+        "order-02",
+        "promo-01"
+      ],
+      "used": null,
+      "passed": true,
+      "hit": null,
+      "detail": "",
+      "out_of_window": [],
+      "forbidden_hits": []
+    },
+    {
+      "id": "q19-bluefin-relocation",
+      "split": "heldout",
+      "category": "filter",
+      "expect": "found",
+      "mode": "answer",
+      "returned": [
+        "bf-02",
+        "bf-01",
+        "bf-03",
+        "acme-01",
+        "acme-02"
+      ],
+      "used": "bf-02",
+      "passed": false,
+      "hit": false,
+      "detail": "missed ['bf-03'], got ['bf-02']",
+      "out_of_window": [],
+      "forbidden_hits": []
+    },
+    {
+      "id": "q20-maya-deadline",
+      "split": "heldout",
+      "category": "conversation",
+      "expect": "found",
+      "mode": "answer",
+      "returned": [
+        "maya-01",
+        "maya-03",
+        "maya-02",
+        "ta-01",
+        "acme-04"
+      ],
+      "used": "maya-01",
+      "passed": false,
+      "hit": false,
+      "detail": "missed ['maya-03'], got ['maya-01']",
+      "out_of_window": [],
+      "forbidden_hits": []
+    },
+    {
+      "id": "q21-told-maya",
+      "split": "heldout",
+      "category": "conversation",
+      "expect": "found",
+      "mode": "answer",
+      "returned": [
+        "maya-03",
+        "maya-02",
+        "jordan-01",
+        "nw-01",
+        "jobs-alert"
+      ],
+      "used": "maya-03",
+      "passed": false,
+      "hit": false,
+      "detail": "missed ['maya-02'], got ['maya-03']",
+      "out_of_window": [],
+      "forbidden_hits": []
+    },
+    {
+      "id": "q22-followup-second",
+      "split": "dev",
+      "category": "follow_up",
+      "expect": "found",
+      "mode": "answer",
+      "returned": [
+        "acme-04",
+        "acme-05",
+        "news-01"
+      ],
+      "used": "acme-05",
+      "passed": true,
+      "hit": true,
+      "detail": "",
+      "out_of_window": [],
+      "forbidden_hits": []
+    },
+    {
+      "id": "q23-followup-second-while-reading",
+      "split": "dev",
+      "category": "follow_up",
+      "expect": "found",
+      "mode": "answer",
+      "returned": [
+        "acme-04",
+        "acme-05",
+        "news-01"
+      ],
+      "used": "acme-05",
+      "passed": true,
+      "hit": true,
+      "detail": "",
+      "out_of_window": [],
+      "forbidden_hits": []
+    },
+    {
+      "id": "q24-followup-third-of-two",
+      "split": "heldout",
+      "category": "follow_up",
+      "expect": "clarify",
+      "mode": "clarify",
+      "returned": [],
+      "used": null,
+      "passed": true,
+      "hit": null,
+      "detail": "",
+      "out_of_window": [],
+      "forbidden_hits": []
+    },
+    {
+      "id": "q25-followup-open-email",
+      "split": "dev",
+      "category": "follow_up",
+      "expect": "found",
+      "mode": "answer",
+      "returned": [
+        "order-01",
+        "order-02",
+        "promo-01"
+      ],
+      "used": "order-02",
+      "passed": true,
+      "hit": true,
+      "detail": "",
+      "out_of_window": [],
+      "forbidden_hits": []
+    },
+    {
+      "id": "q26-northwind-salary",
+      "split": "heldout",
+      "category": "no_answer",
+      "expect": "unanswerable",
+      "mode": "answer",
+      "returned": [
+        "jobs-alert",
+        "nw-02",
+        "nw-01",
+        "bf-01",
+        "cobalt-01"
+      ],
+      "used": "jobs-alert",
+      "passed": true,
+      "hit": null,
+      "detail": "",
+      "out_of_window": [],
+      "forbidden_hits": []
+    },
+    {
+      "id": "q27-old-lease-rent",
+      "split": "dev",
+      "category": "window",
+      "expect": "unanswerable",
+      "mode": "extract",
+      "returned": [
+        "parking-01",
+        "bf-03",
+        "sub-01",
+        "building-01",
+        "bf-02"
+      ],
+      "used": "parking-01",
+      "passed": true,
+      "hit": null,
+      "detail": "",
+      "out_of_window": [],
+      "forbidden_hits": []
+    },
+    {
+      "id": "q28-gym-freeze",
+      "split": "heldout",
+      "category": "window",
+      "expect": "unanswerable",
+      "mode": "answer",
+      "returned": [
+        "sub-01",
+        "reg-01",
+        "ta-01",
+        "promo-01",
+        "jordan-01"
+      ],
+      "used": "sub-01",
+      "passed": true,
+      "hit": null,
+      "detail": "",
+      "out_of_window": [],
+      "forbidden_hits": []
+    },
+    {
+      "id": "q29-parking-permit",
+      "split": "dev",
+      "category": "window",
+      "expect": "found",
+      "mode": "extract",
+      "returned": [
+        "parking-01",
+        "reg-01",
+        "building-01",
+        "order-05",
+        "acme-01"
+      ],
+      "used": "parking-01",
+      "passed": true,
+      "hit": true,
+      "detail": "",
+      "out_of_window": [],
+      "forbidden_hits": []
+    },
+    {
+      "id": "q30-first-acme-contact",
+      "split": "dev",
+      "category": "window",
+      "expect": "found",
+      "mode": "answer",
+      "returned": [
+        "acme-05",
+        "acme-02",
+        "acme-01",
+        "news-01",
+        "acme-04"
+      ],
+      "used": "acme-05",
+      "passed": false,
+      "hit": false,
+      "detail": "missed ['acme-01'], got ['acme-05']",
+      "out_of_window": [],
+      "forbidden_hits": []
+    }
+  ]
+}

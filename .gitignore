@@ -21,5 +21,8 @@ dist/
 .DS_Store
 
 docs/
+.agents/
+.claude/
+skills-lock.json
 
 mail-sherlock.pem

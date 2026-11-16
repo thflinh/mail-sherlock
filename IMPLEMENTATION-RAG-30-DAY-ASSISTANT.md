@@ -34,7 +34,7 @@ Tasks:
 - [ ] Save Gmail `internalDate` as a UTC `message_timestamp` at ingest. Current records store only the `Date` header string.
 - [ ] Backfill existing records before enforcing the cutoff (`scripts/backfill_message_timestamps.py`). List each account's message IDs from the last 31 days, then call `messages.get(format=minimal)`, which returns `internalDate` without the body, only for stored records in that list. Records outside it are older than the window, deleted, or in Spam/Trash; they keep no timestamp, so the cutoff excludes them. Skipping this step would hide all indexed mail until Milestone 3.
 - [ ] Apply scope on search, reader, prior IDs, citations, and thread reads.
-- [ ] Correct hard filters: no matches must return zero, not the previous candidate list.
+- [ ] Correct hard filters: no matches must return zero, not the previous candidate list. Filter chips (unread, attachment, account) and explicit dates are hard filters; a sender the model infers only boosts ranking, because the guess can be wrong.
 - [ ] Intersect requested dates with the last 30 days; enforce Spam/Trash exclusion and sent/archived inclusion.
 - [ ] Remove the 1,000-record retrieval cap through complete iteration/pagination.
 - [ ] Remove the candidate-count BM25 cache initially; add caching only after correctness.

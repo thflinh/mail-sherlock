@@ -197,6 +197,20 @@ class FakeCredentials:
         self.account = account
 
 
+@contextlib.contextmanager
+def fake_google(main, fakes: dict[str, FakeGmail]):
+    """Send the app's Gmail client and stored-credential parsing to the fakes."""
+
+    async def credentials_from_row(row):
+        return FakeCredentials(row["email"])
+
+    def build(*_args, credentials, **_kwargs):
+        return fakes[credentials.account]
+
+    with mock.patch.object(main, "build", build), mock.patch.object(main, "_credentials_from_row", credentials_from_row):
+        yield
+
+
 async def ingest(main, db, emails: list[dict], now: datetime) -> dict[str, FakeGmail]:
     """Run the fixtures through the same sync function `/emails/sync` uses.
 
@@ -207,18 +221,15 @@ async def ingest(main, db, emails: list[dict], now: datetime) -> dict[str, FakeG
         by_account.setdefault(fx["account"], []).append(to_gmail_message(fx, now))
     fakes = {account: FakeGmail(msgs) for account, msgs in by_account.items()}
 
-    # Account rows without token_json: the legacy migration step stays inactive and
-    # on-demand body fetches find no credentials, so nothing reaches Google.
+    # Rows with a token count as connected accounts. The token is a placeholder: fake_google
+    # replaces credential parsing, so nothing reaches Google.
     await db["settings"].update_one(
         {"_id": main.ACCOUNTS_DOC_ID},
-        {"$set": {"accounts": [{"email": a, "session_id": SESSION_ID} for a in fakes]}},
+        {"$set": {"accounts": [{"email": a, "session_id": SESSION_ID, "token_json": "{}"} for a in fakes]}},
         upsert=True,
     )
 
-    def fake_build(*_args, credentials, **_kwargs):
-        return fakes[credentials.account]
-
-    with mock.patch.object(main, "build", fake_build):
+    with fake_google(main, fakes):
         for account in fakes:
             await main._sync_account_bulk(
                 db, account, FakeCredentials(account), max_results=200, owner_session=SESSION_ID
@@ -266,7 +277,7 @@ def score(q: dict, mode: str | None, returned: list[str], used: str | None, ages
     }
 
 
-async def run_question(main, db, q: dict, ages: dict, *, live: bool) -> dict:
+async def run_question(main, db, q: dict, ages: dict, fakes: dict[str, FakeGmail], *, live: bool) -> dict:
     filters = main.FilterOptions(**q["filters"]) if q.get("filters") else None
     context = None
     if q.get("context_ids"):
@@ -290,6 +301,7 @@ async def run_question(main, db, q: dict, ages: dict, *, live: bool) -> dict:
         return {**fallback(query_text), **q.get("intent", {})}
 
     with contextlib.ExitStack() as stack:
+        stack.enter_context(fake_google(main, fakes))  # answer modes fetch bodies from Gmail
         stack.enter_context(mock.patch.object(main, "get_db", lambda: db))
         stack.enter_context(mock.patch.object(main, "agent_stream_call", _skip_generation))
         if not live:
@@ -313,7 +325,6 @@ async def run_all(main, *, live: bool, now: datetime | None = None) -> list[dict
     now = now or datetime.now(UTC)
     emails = load_emails()
     ages = {e["id"]: e["age_days"] for e in emails}
-    main._bm25_cache.clear()  # module-level cache; start each run from the same state
     db = AsyncMongoMockClient()["sherlock_eval"]
-    await ingest(main, db, emails, now)
-    return [await run_question(main, db, q, ages, live=live) for q in load_questions()]
+    fakes = await ingest(main, db, emails, now)
+    return [await run_question(main, db, q, ages, fakes, live=live) for q in load_questions()]
